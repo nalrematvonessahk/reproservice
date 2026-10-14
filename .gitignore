@@ -1,0 +1,11 @@
+# Local secrets and generated run data
+.env
+.env.*
+!.env.example
+*.log
+node_modules/
+__pycache__/
+.venv/
+runs/
+private/
+.DS_Store

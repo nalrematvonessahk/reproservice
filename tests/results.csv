@@ -1,0 +1,1 @@
+scenario,algorithm,trial,commit,digest,seed_hash,initial_actions,final_actions,executed_runs,invalid_candidates,elapsed_ms,outcome,replay_successes,replay_total,stop_reason

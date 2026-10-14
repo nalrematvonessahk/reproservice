@@ -1,0 +1,7 @@
+import fs from 'node:fs';import vm from 'node:vm';import assert from 'node:assert/strict';
+const html=fs.readFileSync(new URL('../prototype/index.html', import.meta.url),'utf8');
+class Element{constructor(){this.children=[];this.disabled=false;this.hidden=false;this.value='drop';this.textContent='';this.innerHTML=''}append(...x){this.children.push(...x)}click(){if(!this.disabled)this.onclick?.()}}
+const ids={};for(const m of html.matchAll(/id="([^"]+)"/g))ids[m[1]]=new Element();let exported;
+const context=vm.createContext({document:{getElementById:id=>ids[id],createElement:()=>new Element()},Blob,URL:{createObjectURL:b=>(exported=b,'blob:demo'),revokeObjectURL:()=>{}},setTimeout:f=>f()});
+vm.runInContext(html.match(/<script>([\s\S]*)<\/script>/)[1],context);
+ids.reset.click();assert(ids.reduce.disabled);ids.run.click();assert(ids.status.textContent.includes('ORIGINAL_FAILURE'));ids.reduce.click();assert.equal(ids.count.textContent,'3 → 1');ids.fix.click();assert.equal(ids.compare.hidden,false);ids.export.click();let data=JSON.parse(await exported.text());assert.equal(data.synthetic,true);assert.equal(data.remaining_interventions,1);assert.equal(data.fixed_version_demo,'PASS');ids.fault.value='error';ids.fault.onchange();ids.run.click();assert(ids.status.textContent.startsWith('PASS'));assert(ids.reduce.disabled);ids.reset.click();assert(ids.export.disabled);console.log('PASS: JS syntax, initial guards, failure → reduction → comparison → synthetic export, PASS guard and reset. DOM stub only; browser layout not tested.');

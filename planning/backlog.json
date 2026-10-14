@@ -1,0 +1,262 @@
+[
+  {
+    "local_id": "PLAN-01",
+    "summary": "Утвердить scope и точные названия",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-15",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Сверены RU/EN/KZ, ограничения и цель; зафиксирован review.",
+    "depends_on": []
+  },
+  {
+    "local_id": "PLAN-02",
+    "summary": "Создать Git и правила review",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-15",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Участники приглашены; main защищена; README содержит реальный URL.",
+    "depends_on": []
+  },
+  {
+    "local_id": "PLAN-03",
+    "summary": "Создать YouTrack и назначить задачи",
+    "owner": "Aldiyar",
+    "due_date": "2026-10-15",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Реальные IDs, владельцы, сроки и статусы проверены.",
+    "depends_on": [
+      "PLAN-02"
+    ]
+  },
+  {
+    "local_id": "PLAN-04",
+    "summary": "Найти 3–5 собеседников",
+    "owner": "Askhat",
+    "due_date": "2026-10-16",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Получены согласия; контакты хранятся приватно.",
+    "depends_on": []
+  },
+  {
+    "local_id": "PLAN-05",
+    "summary": "Провести интервью 1",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-17",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Обезличенная запись INT-01 и связанные требования.",
+    "depends_on": [
+      "PLAN-04"
+    ]
+  },
+  {
+    "local_id": "PLAN-06",
+    "summary": "Провести интервью 2",
+    "owner": "Aldiyar",
+    "due_date": "2026-10-17",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Обезличенная запись INT-02 и связанные требования.",
+    "depends_on": [
+      "PLAN-04"
+    ]
+  },
+  {
+    "local_id": "PLAN-07",
+    "summary": "Провести интервью 3",
+    "owner": "Askhat",
+    "due_date": "2026-10-18",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Обезличенная запись INT-03 и связанные требования.",
+    "depends_on": [
+      "PLAN-04"
+    ]
+  },
+  {
+    "local_id": "PLAN-08",
+    "summary": "Прочитать S01/S02/S05",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-18",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Заметки с конкретными разделами и ограничениями методов.",
+    "depends_on": []
+  },
+  {
+    "local_id": "PLAN-09",
+    "summary": "Прочитать S03/S04/S09",
+    "owner": "Aldiyar",
+    "due_date": "2026-10-18",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Проверены алгоритмы сокращения и допустимые утверждения.",
+    "depends_on": []
+  },
+  {
+    "local_id": "PLAN-10",
+    "summary": "Прочитать S06/S07/S08",
+    "owner": "Askhat",
+    "due_date": "2026-10-18",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Проверены применимость и существующие визуализации.",
+    "depends_on": []
+  },
+  {
+    "local_id": "PLAN-11",
+    "summary": "Проверить матрицу аналогов",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-19",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "5×10 критериев с источниками; НП не заменено на Нет без проверки.",
+    "depends_on": [
+      "PLAN-08",
+      "PLAN-09",
+      "PLAN-10"
+    ]
+  },
+  {
+    "local_id": "PLAN-12",
+    "summary": "Синтезировать интервью и требования",
+    "owner": "Aldiyar",
+    "due_date": "2026-10-19",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Изменения FR/NFR связаны с INT-ID, противоречия сохранены.",
+    "depends_on": [
+      "PLAN-05",
+      "PLAN-06",
+      "PLAN-07"
+    ]
+  },
+  {
+    "local_id": "PLAN-13",
+    "summary": "Проверить архитектуру и selectors",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-20",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Все 3 схемы совпадают с контрактом; неоднозначность обработана.",
+    "depends_on": [
+      "PLAN-12"
+    ]
+  },
+  {
+    "local_id": "PLAN-14",
+    "summary": "Проверить oracle и бюджет reducer",
+    "owner": "Aldiyar",
+    "due_date": "2026-10-20",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "OTHER_FAILURE не принимается; подтверждения входят в бюджет.",
+    "depends_on": [
+      "PLAN-12"
+    ]
+  },
+  {
+    "local_id": "PLAN-15",
+    "summary": "Провести UX-review макета",
+    "owner": "Askhat",
+    "due_date": "2026-10-20",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Записаны действия, ошибки и изменения; данные не выдуманы.",
+    "depends_on": [
+      "PLAN-12"
+    ]
+  },
+  {
+    "local_id": "PLAN-16",
+    "summary": "Согласовать 4 технологических решения",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-20",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "У каждого ADR есть альтернатива, причина и последствия.",
+    "depends_on": [
+      "PLAN-13"
+    ]
+  },
+  {
+    "local_id": "PLAN-17",
+    "summary": "Обсудить проект с руководителем",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-21",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Реальные замечания и решения записаны с датой.",
+    "depends_on": [
+      "PLAN-11",
+      "PLAN-13",
+      "PLAN-14",
+      "PLAN-15"
+    ]
+  },
+  {
+    "local_id": "PLAN-18",
+    "summary": "Исправить исследовательскую часть",
+    "owner": "Aldiyar",
+    "due_date": "2026-10-22",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Замечания связаны с PR и подтверждены reviewer.",
+    "depends_on": [
+      "PLAN-17"
+    ]
+  },
+  {
+    "local_id": "PLAN-19",
+    "summary": "Исправить UX и презентацию",
+    "owner": "Askhat",
+    "due_date": "2026-10-22",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Слайды соответствуют актуальному scope и честному статусу.",
+    "depends_on": [
+      "PLAN-17"
+    ]
+  },
+  {
+    "local_id": "PLAN-20",
+    "summary": "Проверить пакет и ссылки",
+    "owner": "Aldiyar",
+    "due_date": "2026-10-23",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "validate_package.py проходит; файлы и внешние ссылки открываются.",
+    "depends_on": [
+      "PLAN-18",
+      "PLAN-19"
+    ]
+  },
+  {
+    "local_id": "PLAN-21",
+    "summary": "Провести репетицию",
+    "owner": "Askhat",
+    "due_date": "2026-10-23",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Каждый объясняет свой вклад; вопросы и ответы зафиксированы.",
+    "depends_on": [
+      "PLAN-20"
+    ]
+  },
+  {
+    "local_id": "PLAN-22",
+    "summary": "Зафиксировать первую предзащиту",
+    "owner": "Tamerlan",
+    "due_date": "2026-10-24",
+    "priority": "Must",
+    "state": "Open — requires team review",
+    "acceptance": "Review закрыт; согласованный commit отмечен pre-defense-1.",
+    "depends_on": [
+      "PLAN-21"
+    ]
+  }
+]
