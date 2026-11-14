@@ -1,0 +1,121 @@
+# Local Docker Compose test stand (docs/07-architecture.md "Границы системы").
+# Only the controller is published to the host, and only on 127.0.0.1 (NFR01).
+# Everything else is reachable only inside the isolated "repro-net" network.
+name: reproservice
+
+networks:
+  repro-net:
+    driver: bridge
+
+services:
+  postgres-meta:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: reproservice_meta
+      POSTGRES_USER: reproservice
+      POSTGRES_PASSWORD: reproservice
+    volumes:
+      - ./sql/metadata_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks: [repro-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reproservice -d reproservice_meta"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  postgres-testapp:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: testapp
+      POSTGRES_USER: reproservice
+      POSTGRES_PASSWORD: reproservice
+    volumes:
+      - ./sql/testapp_schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    networks: [repro-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reproservice -d testapp"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  payments:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE_PATH: src/services/payments
+    environment:
+      TESTAPP_DATABASE_URL: postgres://reproservice:reproservice@postgres-testapp:5432/testapp?sslmode=disable
+      LISTEN_ADDR: ":8082"
+    depends_on:
+      postgres-testapp:
+        condition: service_healthy
+    networks: [repro-net]
+
+  inventory:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE_PATH: src/services/inventory
+    environment:
+      TESTAPP_DATABASE_URL: postgres://reproservice:reproservice@postgres-testapp:5432/testapp?sslmode=disable
+      LISTEN_ADDR: ":8083"
+    depends_on:
+      postgres-testapp:
+        condition: service_healthy
+    networks: [repro-net]
+
+  orders:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE_PATH: src/services/orders
+    environment:
+      TESTAPP_DATABASE_URL: postgres://reproservice:reproservice@postgres-testapp:5432/testapp?sslmode=disable
+      PAYMENTS_PROXY_URL: "http://proxy:9000/payments/charge"
+      INVENTORY_PROXY_URL: "http://proxy:9000/inventory/reserve"
+      LISTEN_ADDR: ":8081"
+    depends_on:
+      postgres-testapp:
+        condition: service_healthy
+    networks: [repro-net]
+
+  proxy:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE_PATH: src/proxy
+    environment:
+      ROUTES: "payments=http://payments:8082,inventory=http://inventory:8083"
+      CONTROLLER_INTERNAL_URL: "http://controller:7000"
+      LISTEN_ADDR: ":9000"
+    depends_on: [payments, inventory]
+    networks: [repro-net]
+
+  controller:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.go-service
+      args:
+        SERVICE_PATH: src/controller
+    environment:
+      METADATA_DATABASE_URL: postgres://reproservice:reproservice@postgres-meta:5432/reproservice_meta?sslmode=disable
+      TESTAPP_DATABASE_URL: postgres://reproservice:reproservice@postgres-testapp:5432/testapp?sslmode=disable
+      HEALTH_URLS: "http://orders:8081/healthz,http://payments:8082/healthz,http://inventory:8083/healthz,http://proxy:9000/healthz"
+      SEED_SQL_PATH: "/deploy/sql/seed.sql"
+      PROXY_ADMIN_URL: "http://proxy:9000"
+      ORDERS_URL: "http://orders:8081"
+      LISTEN_ADDR: ":7000"
+    depends_on:
+      postgres-meta:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+      orders:
+        condition: service_started
+    ports:
+      - "127.0.0.1:7000:7000" # NFR01: host-reachable only from localhost
+    networks: [repro-net]

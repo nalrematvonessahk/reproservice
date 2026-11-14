@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "id": "multi-fault-demo",
+  "kind": "example-not-executable",
+  "environment": {
+    "compose_profile": "orders-demo",
+    "image_digests": {},
+    "seed_id": "seed-001",
+    "seed_hash": "TO_BE_COMPUTED"
+  },
+  "invariant_id": "payment_exactly_once",
+  "budget": {
+    "runs": 100,
+    "seconds": 600
+  },
+  "interventions": [
+    {
+      "id": "fault-1",
+      "selector": {
+        "logical_operation": "checkout-002",
+        "source": "orders",
+        "target": "payments",
+        "method": "POST",
+        "normalized_path": "/charge",
+        "attempt": 1
+      },
+      "action": { "type": "drop_response_after_success" },
+      "depends_on": []
+    },
+    {
+      "id": "fault-2-decoy",
+      "selector": {
+        "logical_operation": "checkout-002",
+        "source": "orders",
+        "target": "inventory",
+        "method": "POST",
+        "normalized_path": "/reserve",
+        "attempt": 1
+      },
+      "action": { "type": "delay", "delay_ms": 50 },
+      "depends_on": []
+    }
+  ]
+}

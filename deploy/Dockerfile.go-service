@@ -1,0 +1,16 @@
+# Generic build for every Go binary in this repo (orders/payments/inventory/proxy/controller).
+# Build with: docker build -f deploy/Dockerfile.go-service --build-arg SERVICE_PATH=src/proxy -t reproservice-proxy .
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY internal ./internal
+COPY src ./src
+ARG SERVICE_PATH
+RUN CGO_ENABLED=0 go build -o /out/app ./${SERVICE_PATH}
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY --from=build /out/app /app
+COPY deploy/sql /deploy/sql
+ENTRYPOINT ["/app"]

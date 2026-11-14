@@ -1,0 +1,4 @@
+-- Fixed seed for the test-app database. Intentionally empty beyond the comment: the
+-- demo checkout flow creates its own rows per run. Its hash (src/runner.SeedHash) is
+-- still recorded on every scenario version per ADR-002, so a changed seed file is
+-- detected rather than silently replayed against a different starting state.

@@ -26,7 +26,22 @@ Tamerlan Khassenov · Aldiyar Gaisa · Askhat Rakhmetollayev
 
 Проблема: частичный сбой HTTP-взаимодействия может оставить выполненную операцию без доставленного ответа, а повтор запроса — нарушить бизнес-инвариант. Пользователи: backend- и QA-инженеры. Ожидаемый результат: локальная платформа сохранения, повторения и сокращения поддерживаемых сценариев с экспортом доказательств. Scope: изолированный HTTP/JSON-стенд; без production, Kubernetes и полного детерминизма ОС.
 
-Выбранные технологии: Go для proxy/controller, React + TypeScript для UI, PostgreSQL для метаданных и отдельной тестовой БД, Docker Compose для стенда. Реализация пока не выполнена. Обоснование альтернатив: docs/05-technology-comparison.md.
+Выбранные технологии: Go для proxy/controller, React + TypeScript для UI, PostgreSQL для метаданных и отдельной тестовой БД, Docker Compose для стенда. Обоснование альтернатив: docs/05-technology-comparison.md.
+
+## Статус реализации (14 ноября 2026)
+
+Backend (controller/proxy/runner/oracle/reducer, демо-сервисы orders/payments/inventory) и web UI (React+TypeScript+Vite) реализованы и проверены реальным запуском через Docker Compose: сценарий с потерей успешного ответа платежа воспроизводит двойной платёж, а `POST /api/runs/{id}/reduce` сокращает набор вмешательств до минимального на реальном стенде (не на синтетических данных), и это видно в UI, а не только через curl. Подробности и ограничения: VERIFICATION.md, src/controller/README.md, src/proxy/README.md, src/runner/README.md, src/reducer/README.md, src/web/README.md. Код ещё не проверен Алдияром, Асхатом и руководителем, и полный сравнительный эксперимент из tests/EVALUATION.md не проводился (tests/results.csv не заполнен, см. scripts/validate_package.py).
+
+Запуск стенда:
+
+```
+docker compose -f deploy/docker-compose.yml up -d --build
+curl -s -X POST http://127.0.0.1:7000/api/scenarios -H "Content-Type: application/json" -d @config/scenario.example.json
+curl -s -X POST http://127.0.0.1:7000/api/runs -H "Content-Type: application/json" -d '{"version_id":"<из ответа выше>","idempotency_key":"demo-1"}'
+curl -s http://127.0.0.1:7000/api/runs/<run_id>
+```
+
+Тесты: `go test ./...` (юнит, без стенда) и `go test -tags=integration ./tests/integration/...` (нужен запущенный стенд).
 
 ## Навигация
 

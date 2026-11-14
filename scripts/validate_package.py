@@ -13,4 +13,4 @@ for t in tasks:
  assert t['owner'] in ['Tamerlan','Aldiyar','Askhat'];assert all(d in ids for d in t['depends_on']);assert t['acceptance']
 with zipfile.ZipFile(root/'presentation/Predefense_1.pptx') as z:assert z.testzip() is None
 assert len((root/'tests/results.csv').read_text().splitlines())==1,'Do not fabricate results'
-print(f'OK: required files, {len(refs)} sources, {len(tasks)} tasks, 3 diagram pairs and PPTX container. Backend not implemented.')
+print(f'OK: required files, {len(refs)} sources, {len(tasks)} tasks, 3 diagram pairs and PPTX container. This script checks preparation files only, not backend/Docker status -- see VERIFICATION.md for that.')
