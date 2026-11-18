@@ -115,8 +115,23 @@ type Result struct {
 	SkippedInvalid   int // candidates rejected by Options.Valid without executing
 	UnstableRejected int // candidates that reproduced once but failed confirmation
 	OriginalOutcome  Outcome
+	// Decisions lists, in order, every candidate that reproduced the original failure on
+	// its screening run together with its confirmation verdict (the full original set
+	// first). Candidates that did not reproduce, were invalid, or were answered from the
+	// cache have no entry. The controller persists these as candidates.accepted /
+	// candidates.confirmations.
+	Decisions []Decision
 	Error            string // set for StopInfraError / StopCancelled
 	Duration         time.Duration
+}
+
+// Decision is the confirmation verdict for one candidate that reproduced on screening.
+// Confirmations is how many of the ConfirmationRuns reruns reproduced the failure
+// (ConfirmationRuns when Accepted; fewer when it fluctuated or the run stopped early).
+type Decision struct {
+	Candidate     []string
+	Accepted      bool
+	Confirmations int
 }
 
 // Options carries the pieces that are identical across algorithms except for Order.
@@ -193,6 +208,7 @@ type session struct {
 	// decided candidates are cached, never single executions inside a confirmation.
 	cache map[string]bool
 
+	decisions []Decision
 	confirmed []string // last candidate confirmed 3/3
 	isConfirm bool     // whether `confirmed` has actually been confirmed
 }
@@ -245,19 +261,24 @@ func reproduces(o Outcome) bool { return o == OutcomeOriginalFailure }
 
 // confirm re-runs a candidate ConfirmationRuns times and requires every run to
 // reproduce the original failure (3/3). All runs are charged to the budget.
-func (s *session) confirm(ids []string) (bool, *halt) {
+func (s *session) confirm(ids []string) (ok bool, reproduced int, h *halt) {
 	for i := 0; i < ConfirmationRuns; i++ {
 		before := s.runsUsed
 		out, h := s.execute(ids)
 		s.confirmationRuns += s.runsUsed - before
 		if h != nil {
-			return false, h // budget/cancel/infra mid-confirmation: NOT confirmed
+			return false, reproduced, h // budget/cancel/infra mid-confirmation: NOT confirmed
 		}
 		if !reproduces(out) {
-			return false, nil
+			return false, reproduced, nil
 		}
+		reproduced++
 	}
-	return true, nil
+	return true, reproduced, nil
+}
+
+func (s *session) decide(ids []string, accepted bool, confirmations int) {
+	s.decisions = append(s.decisions, Decision{Candidate: append([]string{}, ids...), Accepted: accepted, Confirmations: confirmations})
 }
 
 // attempt decides whether a candidate becomes the new accepted set: it must be valid,
@@ -281,7 +302,8 @@ func (s *session) attempt(ids []string) (bool, *halt) {
 		s.cache[k] = false
 		return false, nil
 	}
-	ok, h := s.confirm(ids)
+	ok, n, h := s.confirm(ids)
+	s.decide(ids, ok, n)
 	if h != nil {
 		return false, h
 	}
@@ -307,6 +329,7 @@ func (s *session) result(reason StopReason, h *halt) *Result {
 		CacheHits:        s.cacheHits,
 		SkippedInvalid:   s.skippedInvalid,
 		UnstableRejected: s.unstableRejected,
+		Decisions:        s.decisions,
 	}
 	if h != nil && h.err != nil {
 		r.Error = h.err.Error()
@@ -324,7 +347,8 @@ func (s *session) run(all []string, algo Algorithm) *Result {
 		r.OriginalOutcome = out
 		return r
 	}
-	ok, h := s.confirm(all)
+	ok, n, h := s.confirm(all)
+	s.decide(all, ok, n)
 	if h != nil {
 		return s.result(h.reason, h)
 	}

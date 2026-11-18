@@ -321,3 +321,58 @@ func TestInvalidScenario_DuplicateSelectorRejected(t *testing.T) {
 		t.Fatalf("expected 422 for duplicate selectors, got %d", status)
 	}
 }
+
+// candidates.accepted / candidates.confirmations are persisted in the real metadata DB:
+// one row per execution; the screening row of each confirmed candidate carries
+// accepted=true and confirmations=3, and the last accepted set is the reduction result.
+func TestReduction_PersistsCandidateAcceptanceInPostgres(t *testing.T) {
+	psql := func(q string) (string, error) {
+		cmd := exec.Command("docker", "compose", "-f", "../../deploy/docker-compose.yml", "exec", "-T", "postgres-meta",
+			"psql", "-U", "reproservice", "-d", "reproservice_meta", "-tAc", q)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		err := cmd.Run()
+		return strings.TrimSpace(out.String()), err
+	}
+	if _, err := psql("select 1"); err != nil {
+		t.Skipf("docker compose exec unavailable: %v", err)
+	}
+	vid := createVersion(t, "../../config/scenarios/multi-fault-demo.json")
+	run := runAndWait(t, vid, nil)
+	red := reduce(t, run["run_id"].(string), "ddmin")
+	rid := red["reduction_id"].(string)
+
+	q := func(sql string) string {
+		out, err := psql(sql)
+		if err != nil {
+			t.Fatalf("psql: %v (%s)", err, sql)
+		}
+		return out
+	}
+	rows := fmt.Sprintf("from candidates where reduction_id='%s'", rid)
+	if got, want := q("select count(*) "+rows), fmt.Sprint(int(red["runs_used"].(float64))); got != want {
+		t.Fatalf("one candidate row per charged execution: rows=%s runs_used=%s", got, want)
+	}
+	if got := q("select count(*) " + rows + " and accepted"); got != "2" {
+		t.Fatalf("expected 2 accepted rows (full set and [fault-1]), got %s", got)
+	}
+	if got := q("select count(*) " + rows + " and accepted and confirmations<>3"); got != "0" {
+		t.Fatalf("every accepted row must have confirmations=3, %s violate it", got)
+	}
+	if got := q("select count(*) " + rows + " and not accepted and confirmations<>0"); got != "0" {
+		t.Fatalf("fully rejected/confirmation rows keep confirmations=0, %s do not", got)
+	}
+	if got, want := q("select coalesce(sum(confirmations),0) "+rows), fmt.Sprint(int(red["confirmation_runs"].(float64))); got != want {
+		t.Fatalf("sum(confirmations)=%s must equal confirmation_runs=%s", got, want)
+	}
+	// The last accepted candidate (by execution order) is the reduction's result.
+	last := q("select intervention_ids::text " + rows + " and accepted order by created_at desc limit 1")
+	var got []string
+	if err := json.Unmarshal([]byte(last), &got); err != nil {
+		t.Fatalf("decode %q: %v", last, err)
+	}
+	want := strs(red["accepted_intervention_ids"])
+	if len(got) != 1 || len(want) != 1 || got[0] != want[0] {
+		t.Fatalf("last accepted candidate %v != reduction result %v", got, want)
+	}
+}

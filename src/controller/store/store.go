@@ -238,3 +238,24 @@ func (s *Store) GetReduction(ctx context.Context, reductionID string) (*schema.R
 	}
 	return &r, nil
 }
+
+// SetCandidateDecision records the reducer's verdict on the SCREENING row of a
+// candidate set: accepted = confirmed 3/3, confirmations = confirmation reruns that
+// reproduced the failure. The screening row is the first row of that exact set (same
+// order) in the reduction; later rows of the same set are its confirmation executions
+// and keep the defaults (false / 0). A set is screened at most once per reduction
+// (result cache), so this addresses exactly one row.
+func (s *Store) SetCandidateDecision(ctx context.Context, reductionID string, interventionIDs []string, accepted bool, confirmations int) error {
+	if interventionIDs == nil {
+		interventionIDs = []string{}
+	}
+	ids, _ := json.Marshal(interventionIDs)
+	_, err := s.pool.Exec(ctx, `
+		UPDATE candidates SET accepted=$3, confirmations=$4
+		WHERE candidate_id = (
+			SELECT candidate_id FROM candidates
+			WHERE reduction_id=$1 AND intervention_ids=$2::jsonb
+			ORDER BY created_at, length(candidate_id), candidate_id LIMIT 1)`,
+		reductionID, ids, accepted, confirmations)
+	return err
+}

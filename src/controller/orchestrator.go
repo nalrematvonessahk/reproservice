@@ -28,6 +28,7 @@ type runStore interface {
 	InsertAssertion(ctx context.Context, runID string, a schema.Assertion) error
 	InsertCandidate(ctx context.Context, candidateID, reductionID, runID string, interventionIDs []string, outcome schema.Outcome, accepted bool, confirmations int) error
 	SaveReduction(ctx context.Context, r schema.Reduction) error
+	SetCandidateDecision(ctx context.Context, reductionID string, interventionIDs []string, accepted bool, confirmations int) error
 }
 
 type resetter interface {
@@ -370,6 +371,16 @@ func (o *Orchestrator) Reduce(ctx context.Context, parent *schema.Run, sc *schem
 	res, err := reducer.ReduceWithOptions(ctx, exec, parent.ActiveIDs, algo, budget, opts)
 	if err != nil {
 		return nil, err
+	}
+
+	// Persist the per-candidate verdicts (candidates.accepted / confirmations). Bounded
+	// and detached from cancellation: a cancelled reduction still records what it decided.
+	bk, done := context.WithTimeout(context.WithoutCancel(ctx), bookkeepingTimeout)
+	defer done()
+	for _, d := range res.Decisions {
+		if err := o.store.SetCandidateDecision(bk, rec.ReductionID, d.Candidate, d.Accepted, d.Confirmations); err != nil {
+			log.Printf("orchestrator: reduction %s: persist candidate decision: %v", rec.ReductionID, err)
+		}
 	}
 
 	rec.State = "COMPLETED"

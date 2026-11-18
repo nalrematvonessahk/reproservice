@@ -22,6 +22,13 @@ import (
 	"reproservice/src/reducer"
 )
 
+type decisionRec struct {
+	reductionID   string
+	ids           []string
+	accepted      bool
+	confirmations int
+}
+
 type world struct {
 	mu sync.Mutex
 
@@ -33,6 +40,7 @@ type world struct {
 	infra           map[string]string
 	assertions      map[string]schema.Assertion
 	reductions      []schema.Reduction
+	decisions       []decisionRec
 	candidateRuns   []string
 	failState       map[schema.RunState]error
 
@@ -166,6 +174,13 @@ func (w *world) SaveReduction(_ context.Context, r schema.Reduction) error {
 }
 
 // ---- resetter ----
+
+func (w *world) SetCandidateDecision(_ context.Context, reductionID string, ids []string, accepted bool, confirmations int) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.decisions = append(w.decisions, decisionRec{reductionID, append([]string{}, ids...), accepted, confirmations})
+	return nil
+}
 
 func (w *world) Reset(_ context.Context) error {
 	w.mu.Lock()
@@ -1001,4 +1016,35 @@ func sortedCopy(in []string) []string {
 	out := append([]string{}, in...)
 	sort.Strings(out)
 	return out
+}
+
+// candidates.accepted / confirmations: the reducer's per-candidate verdicts reach the store,
+// addressed by reduction id, for the original set and for every confirmed candidate.
+func TestReduce_PersistsCandidateDecisions(t *testing.T) {
+	w := newWorld()
+	w.requireFault("fault-1")
+	parent := parentRun(w, "fault-1", "fault-2")
+	sc := scenario(100, 600, iv("fault-1"), iv("fault-2"))
+	rec, err := w.orch().Reduce(context.Background(), parent, sc, reducer.AlgoDDMin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(w.decisions) < 2 {
+		t.Fatalf("want original + accepted candidate decisions, got %+v", w.decisions)
+	}
+	var accepted []decisionRec
+	for _, d := range w.decisions {
+		if d.reductionID != rec.ReductionID {
+			t.Fatalf("decision for another reduction: %+v", d)
+		}
+		if d.accepted {
+			if d.confirmations != reducer.ConfirmationRuns {
+				t.Fatalf("an accepted candidate must have %d confirmations: %+v", reducer.ConfirmationRuns, d)
+			}
+			accepted = append(accepted, d)
+		}
+	}
+	if got := accepted[len(accepted)-1].ids; !reflect.DeepEqual(got, rec.Accepted) {
+		t.Fatalf("the last accepted candidate %v must equal the reduction result %v", got, rec.Accepted)
+	}
 }
