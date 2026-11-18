@@ -2,10 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 )
 
 // SUTClient drives the demo application's checkout flow for a run. It stands in for
@@ -18,7 +18,7 @@ type SUTClient struct {
 }
 
 func NewSUTClient(ordersURL string) *SUTClient {
-	return &SUTClient{ordersURL: ordersURL, client: &http.Client{Timeout: 10 * time.Second}}
+	return &SUTClient{ordersURL: ordersURL, client: &http.Client{}}
 }
 
 type CheckoutResult struct {
@@ -31,7 +31,7 @@ type CheckoutResult struct {
 // Checkout runs one instance of the logical operation the scenario's interventions
 // target. runID is passed through as X-Run-Id (via body, consumed by orders) so the
 // proxy can scope fault matching to this run.
-func (c *SUTClient) Checkout(orderID, logicalOperation, runID string) (*CheckoutResult, error) {
+func (c *SUTClient) Checkout(ctx context.Context, orderID, logicalOperation, runID string) (*CheckoutResult, error) {
 	body, _ := json.Marshal(map[string]any{
 		"order_id":          orderID,
 		"logical_operation": logicalOperation,
@@ -39,7 +39,12 @@ func (c *SUTClient) Checkout(orderID, logicalOperation, runID string) (*Checkout
 		"amount_cents":      1999,
 		"sku":               "sku-demo-1",
 	})
-	resp, err := c.client.Post(c.ordersURL+"/checkout", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.ordersURL+"/checkout", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("sutclient: build checkout request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("sutclient: checkout request: %w", err)
 	}

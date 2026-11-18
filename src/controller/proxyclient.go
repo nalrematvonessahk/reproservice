@@ -40,12 +40,29 @@ func (p *ProxyClient) Activate(runID string, interventions []schema.Intervention
 	return nil
 }
 
-func (p *ProxyClient) Deactivate(runID string) error {
+// Deactivate ends the run's fault scope and returns how many times each activated
+// intervention's selector matched (see proxy activeRun.finish). Callers treat != 1 as
+// INAPPLICABLE (FR03).
+func (p *ProxyClient) Deactivate(runID string) (map[string]int, error) {
 	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/admin/runs/%s/activate", p.baseURL, runID), nil)
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("proxyclient: deactivate: %w", err)
+		return nil, fmt.Errorf("proxyclient: deactivate: %w", err)
 	}
 	defer resp.Body.Close()
-	return nil
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("proxyclient: deactivate returned %d", resp.StatusCode)
+	}
+	var out struct {
+		Fired *map[string]int `json:"fired"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("proxyclient: decode deactivate response: %w", err)
+	}
+	if out.Fired == nil || *out.Fired == nil {
+		// An incompatible/older proxy: surface an infrastructure error, never a
+		// scenario verdict (every intervention would otherwise look "not matched").
+		return nil, fmt.Errorf("proxyclient: deactivate response has no match counts (incompatible proxy build?)")
+	}
+	return *out.Fired, nil
 }

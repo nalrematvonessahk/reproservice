@@ -81,14 +81,14 @@ func main() {
 			return
 		}
 
-		paymentID, attempts, err := chargeWithRetries(client, paymentsURL, req)
+		paymentID, attempts, err := chargeWithRetries(ctx, client, paymentsURL, req)
 		if err != nil {
 			pool.Exec(ctx, `UPDATE orders SET status='payment_failed' WHERE order_id=$1`, req.OrderID)
 			httpx.WriteError(w, 502, "UPSTREAM_PAYMENTS_FAILED", err.Error(), "")
 			return
 		}
 
-		resID, err := reserveOnce(client, inventoryURL, req)
+		resID, err := reserveOnce(ctx, client, inventoryURL, req)
 		if err != nil {
 			pool.Exec(ctx, `UPDATE orders SET status='inventory_failed' WHERE order_id=$1`, req.OrderID)
 			httpx.WriteError(w, 502, "UPSTREAM_INVENTORY_FAILED", err.Error(), "")
@@ -113,11 +113,11 @@ func main() {
 // chargeWithRetries performs the deterministic retry behaviour that makes the
 // double-payment bug reproducible: no jitter, fixed attempt count, retries only on a
 // transport-level failure (which is what a dropped response looks like to the caller).
-func chargeWithRetries(client *http.Client, url string, req checkoutRequest) (paymentID string, attempts int, err error) {
+func chargeWithRetries(ctx context.Context, client *http.Client, url string, req checkoutRequest) (paymentID string, attempts int, err error) {
 	body, _ := json.Marshal(map[string]any{"order_id": req.OrderID, "amount_cents": req.AmountCents})
 	for attempt := 1; attempt <= maxPaymentAttempts; attempt++ {
 		attempts = attempt
-		httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+		httpReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("X-Logical-Operation", req.LogicalOperation)
 		httpReq.Header.Set("X-Source", "orders")
@@ -127,6 +127,9 @@ func chargeWithRetries(client *http.Client, url string, req checkoutRequest) (pa
 		resp, reqErr := client.Do(httpReq)
 		if reqErr != nil {
 			err = reqErr
+			if ctx.Err() != nil {
+				return "", attempts, ctx.Err() // the caller gave up (cancel/timeout): do not retry
+			}
 			continue // transport failure (e.g. dropped response) -> deterministic retry
 		}
 		defer resp.Body.Close()
@@ -143,9 +146,9 @@ func chargeWithRetries(client *http.Client, url string, req checkoutRequest) (pa
 	return "", attempts, err
 }
 
-func reserveOnce(client *http.Client, url string, req checkoutRequest) (string, error) {
+func reserveOnce(ctx context.Context, client *http.Client, url string, req checkoutRequest) (string, error) {
 	body, _ := json.Marshal(map[string]any{"order_id": req.OrderID, "sku": req.SKU})
-	httpReq, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+	httpReq, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("X-Logical-Operation", req.LogicalOperation)
 	httpReq.Header.Set("X-Source", "orders")

@@ -66,3 +66,15 @@ CREATE TABLE IF NOT EXISTS assertions (
     infra_error     BOOLEAN NOT NULL DEFAULT false,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- One row per reduction (FR08/NFR06): the last candidate confirmed 3/3, budget consumed
+-- and stop reason. Mirrored by store.EnsureSchema for already-initialised volumes.
+CREATE TABLE IF NOT EXISTS reductions (
+    reduction_id TEXT PRIMARY KEY,
+    run_id       TEXT NOT NULL REFERENCES runs(run_id),
+    state        TEXT NOT NULL,
+    stop_reason  TEXT,
+    body         JSONB NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

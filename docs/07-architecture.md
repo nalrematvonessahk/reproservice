@@ -40,7 +40,7 @@ Selector: logical_operation + source + target + method + normalized_path + attem
 
 ## Черновой API
 
-POST /api/scenarios → validation + version ID; POST /api/runs → 202/run ID; GET /api/runs/{id}; GET /api/runs/{id}/events?cursor=; POST /api/runs/{id}/cancel; POST /api/runs/{id}/reduce; GET /api/runs/{id}/export. Операции запуска имеют idempotency key, повторный POST не создаёт второй run. Параллельный запуск при занятом стенде получает 409. JSON schema_version=1. Ошибка содержит code, message, field и correlation_id.
+POST /api/scenarios → validation + version ID; POST /api/runs → 202/run ID; GET /api/runs/{id}; GET /api/runs/{id}/events?cursor=; POST /api/runs/{id}/cancel; POST /api/runs/{id}/reduce; GET /api/runs/{id}/export. Реализовано дополнительно (18 ноября 2026): GET /api/reductions/{id} → сохранённая запись сокращения (404 REDUCTION_NOT_FOUND); POST /api/runs/{id}/cancel для уже завершённого run возвращает 200 {"status":"not_running","state":...} и не меняет результат, для выполняющегося run или сокращения — {"status":"cancel_requested"}; неизвестный algorithm в reduce → 422 UNKNOWN_ALGORITHM. Операции запуска имеют idempotency key, повторный POST не создаёт второй run. Параллельный запуск при занятом стенде получает 409. JSON schema_version=1. Ошибка содержит code, message, field и correlation_id.
 
 ## Что не обещаем
 

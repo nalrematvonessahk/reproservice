@@ -29,6 +29,7 @@ func (a *API) Routes() http.Handler {
 	mux.HandleFunc("GET /api/runs/{id}/events", a.listEvents)
 	mux.HandleFunc("POST /api/runs/{id}/cancel", a.cancelRun)
 	mux.HandleFunc("POST /api/runs/{id}/reduce", a.reduceRun)
+	mux.HandleFunc("GET /api/reductions/{id}", a.getReduction)
 	mux.HandleFunc("GET /api/runs/{id}/export", a.exportRun)
 	mux.HandleFunc("POST /internal/runs/{run_id}/events", a.ingestEvent)
 	return mux
@@ -83,6 +84,17 @@ func (a *API) createRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	known := make(map[string]bool, len(sc.Interventions))
+	for _, iv := range sc.Interventions {
+		known[iv.ID] = true
+	}
+	for _, id := range active {
+		if !known[id] {
+			httpx.WriteError(w, 422, "UNKNOWN_INTERVENTION", "active_intervention_ids contains an id not defined in this scenario version: "+id, corrID())
+			return
+		}
+	}
+
 	if !a.orch.TryAcquire() {
 		httpx.WriteError(w, 409, "STAND_BUSY", "another run is currently using the stand", corrID())
 		return
@@ -104,7 +116,7 @@ func (a *API) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go a.orch.ExecuteRun(run, sc)
+	a.orch.StartRun(run, sc) // registers cancel synchronously, then runs in a goroutine
 	httpx.WriteJSON(w, 202, map[string]string{"run_id": run.RunID})
 }
 
@@ -139,11 +151,18 @@ func (a *API) listEvents(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) cancelRun(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
-	if _, err := a.store.GetRun(r.Context(), runID); err != nil {
+	run, err := a.store.GetRun(r.Context(), runID)
+	if err != nil {
 		httpx.WriteError(w, 404, "RUN_NOT_FOUND", err.Error(), corrID())
 		return
 	}
-	a.orch.Cancel(runID)
+	// FR09: cancellation stops new candidates of the run or of a reduction in flight.
+	// A run that already finished cannot be cancelled and is left exactly as it was
+	// (its COMPLETED outcome is never rewritten); say so instead of pretending.
+	if !a.orch.Cancel(runID) {
+		httpx.WriteJSON(w, 200, map[string]string{"status": "not_running", "state": string(run.State)})
+		return
+	}
 	httpx.WriteJSON(w, 200, map[string]string{"status": "cancel_requested"})
 }
 
@@ -169,6 +188,12 @@ func (a *API) reduceRun(w http.ResponseWriter, r *http.Request) {
 	if algo == "" {
 		algo = reducer.AlgoDDMin
 	}
+	switch algo {
+	case reducer.AlgoDDMin, reducer.AlgoSequential, reducer.AlgoDependencyAware:
+	default:
+		httpx.WriteError(w, 422, "UNKNOWN_ALGORITHM", "algorithm must be ddmin, sequential or dependency_aware", corrID())
+		return
+	}
 
 	if !a.orch.TryAcquire() {
 		httpx.WriteError(w, 409, "STAND_BUSY", "another run is currently using the stand", corrID())
@@ -176,33 +201,21 @@ func (a *API) reduceRun(w http.ResponseWriter, r *http.Request) {
 	}
 	defer a.orch.Release()
 
-	var order func([]string) []string
-	if algo == reducer.AlgoDependencyAware {
-		deps := map[string][]string{}
-		for _, iv := range sc.Interventions {
-			deps[iv.ID] = iv.DependsOn
-		}
-		order = reducer.LeafFirstOrder(deps)
-	}
-
-	ctx := r.Context()
-	reductionID := newID("red")
-	exec := &candidateExecutor{o: a.orch, ctx: ctx, scenario: sc, versionID: run.VersionID, parentRunID: runID, reductionID: reductionID}
-	budget := reducer.Budget{MaxRuns: sc.Budget.Runs, MaxDuration: time.Duration(sc.Budget.Seconds) * time.Second}
-
-	result, err := reducer.Reduce(ctx, exec, run.ActiveIDs, algo, budget, order)
+	rec, err := a.orch.Reduce(r.Context(), run, sc, algo)
 	if err != nil {
 		httpx.WriteError(w, 500, "REDUCE_FAILED", err.Error(), corrID())
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{
-		"reduction_id": reductionID,
-		"algorithm":    result.Algorithm,
-		"accepted_intervention_ids": result.Accepted,
-		"runs_used":    result.RunsUsed,
-		"stop_reason":  result.StopReason,
-		"unstable":     result.Unstable,
-	})
+	httpx.WriteJSON(w, 200, rec)
+}
+
+func (a *API) getReduction(w http.ResponseWriter, r *http.Request) {
+	rec, err := a.store.GetReduction(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httpx.WriteError(w, 404, "REDUCTION_NOT_FOUND", err.Error(), corrID())
+		return
+	}
+	httpx.WriteJSON(w, 200, rec)
 }
 
 func (a *API) exportRun(w http.ResponseWriter, r *http.Request) {

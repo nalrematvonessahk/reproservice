@@ -28,9 +28,9 @@ Tamerlan Khassenov · Aldiyar Gaisa · Askhat Rakhmetollayev
 
 Выбранные технологии: Go для proxy/controller, React + TypeScript для UI, PostgreSQL для метаданных и отдельной тестовой БД, Docker Compose для стенда. Обоснование альтернатив: docs/05-technology-comparison.md.
 
-## Статус реализации (14 ноября 2026)
+## Статус реализации (14 и 18 ноября 2026)
 
-Backend (controller/proxy/runner/oracle/reducer, демо-сервисы orders/payments/inventory) и web UI (React+TypeScript+Vite) реализованы и проверены реальным запуском через Docker Compose: сценарий с потерей успешного ответа платежа воспроизводит двойной платёж, а `POST /api/runs/{id}/reduce` сокращает набор вмешательств до минимального на реальном стенде (не на синтетических данных), и это видно в UI, а не только через curl. Подробности и ограничения: VERIFICATION.md, src/controller/README.md, src/proxy/README.md, src/runner/README.md, src/reducer/README.md, src/web/README.md. Код ещё не проверен Алдияром, Асхатом и руководителем, и полный сравнительный эксперимент из tests/EVALUATION.md не проводился (tests/results.csv не заполнен, см. scripts/validate_package.py).
+Backend (controller/proxy/runner/oracle/reducer, демо-сервисы orders/payments/inventory) и web UI (React+TypeScript+Vite) реализованы и проверены реальным запуском через Docker Compose: сценарий с потерей успешного ответа платежа воспроизводит двойной платёж, а `POST /api/runs/{id}/reduce` сокращает набор вмешательств до минимального на реальном стенде (не на синтетических данных), и это видно в UI, а не только через curl. Подробности и ограничения: VERIFICATION.md, src/controller/README.md, src/proxy/README.md, src/runner/README.md, src/reducer/README.md, src/web/README.md. Обновление 18 ноября 2026 (DEMO-52): проверены и исправлены runner/oracle/reducer и отмена (FR02, FR06, FR08, FR09, NFR06) — три дефекта найдены вживую и исправлены, добавлены юнит- и интеграционные тесты (прогон и таблица приёмки с ограничениями: VERIFICATION.md). TIMEOUT проверен только юнит-тестами; reset — SQL-truncate, а не пересоздание volume, seed пуст. Код ещё не проверен Алдияром, Асхатом и руководителем, и полный сравнительный эксперимент из tests/EVALUATION.md не проводился (tests/results.csv не заполнен, см. scripts/validate_package.py).
 
 Запуск стенда:
 

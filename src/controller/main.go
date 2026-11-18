@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -52,6 +53,9 @@ func main() {
 	}
 	or := oracle.New(testAppPool)
 	st := store.New(metaPool)
+	if err := ensureSchemaWithRetry(ctx, st); err != nil {
+		log.Fatalf("controller: ensure metadata schema: %v", err)
+	}
 	px := NewProxyClient(envDefault("PROXY_ADMIN_URL", "http://localhost:9000"))
 	sut := NewSUTClient(envDefault("ORDERS_URL", "http://localhost:8081"))
 
@@ -84,6 +88,25 @@ func withLocalCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ensureSchemaWithRetry tolerates the metadata DB still coming up (the compose
+// healthcheck can pass on the Unix socket before TCP accepts connections), so the
+// controller does not exit on a transient connection error at startup.
+func ensureSchemaWithRetry(ctx context.Context, st *store.Store) error {
+	var err error
+	for attempt := 1; attempt <= 30; attempt++ {
+		if err = st.EnsureSchema(ctx); err == nil {
+			return nil
+		}
+		log.Printf("controller: metadata schema not ready (attempt %d/30): %v", attempt, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	return err
 }
 
 func mustEnv(key string) string {
