@@ -1,59 +1,57 @@
 package reducer
 
-import "context"
-
-// reproduces reports whether an outcome counts as the original failure for reduction
-// purposes. Every other outcome (PASS, OTHER_FAILURE, TIMEOUT, INAPPLICABLE) means the
-// candidate did not reproduce the bug we are shrinking around.
-func reproduces(o Outcome) bool { return o == OutcomeOriginalFailure }
-
 // ddmin is Zeller's classic delta-debugging minimization, adapted to operate on a set
-// of intervention IDs instead of a flat byte sequence. `order`, if non-nil, is applied
-// to the active set at the start of each outer iteration -- this is the only thing the
-// dependency-aware variant changes; acceptance criteria are identical (ADR-005).
-func ddmin(ctx context.Context, exec Executor, all []string, t *budgetTracker, order func([]string) []string) (*Result, error) {
+// of intervention IDs instead of a flat byte sequence. The session's Options.Order, if
+// set, is applied to the active set at the start of each outer iteration -- this is the
+// only thing the dependency-aware variant changes; acceptance criteria are identical
+// (ADR-005).
+//
+// Termination: the loop ends when, at granularity n == len(active), every complement
+// (each single-element removal) was tried and rejected -- 1-minimality over valid
+// candidates -- or, for a singleton, when the empty set was tried and rejected.
+func (s *session) ddmin(all []string) *halt {
 	active := append([]string{}, all...)
 	n := 2
 
-	for len(active) >= 1 {
-		if len(active) == 1 {
-			break // a singleton can't be split into a strictly smaller reproducing chunk
+	for {
+		switch len(active) {
+		case 0:
+			return nil
+		case 1:
+			// A singleton cannot be split; the only strictly smaller candidate is the
+			// empty set (no interventions at all). Probing it is what makes the final
+			// "minimal" claim true for single-element results.
+			_, h := s.attempt([]string{}) // accepted -> s.confirmed becomes the empty set
+			return h
 		}
-		if order != nil {
-			active = order(active)
-		}
-		if reason := t.exhausted(); reason != "" {
-			return finish(ctx, exec, t, active, reason, order != nil)
+		if s.opts.Order != nil {
+			active = s.opts.Order(active)
 		}
 
 		chunks := split(active, n)
-		reducedInThisPass := false
+		reduced := false
 
-		// Try each chunk alone.
+		// Reduce to subset: try each chunk alone.
 		for _, chunk := range chunks {
 			if len(chunk) == 0 {
 				continue
 			}
-			if reason := t.exhausted(); reason != "" {
-				return finish(ctx, exec, t, active, reason, order != nil)
+			ok, h := s.attempt(chunk)
+			if h != nil {
+				return h
 			}
-			out, err := t.run(ctx, exec, chunk)
-			if err != nil {
-				return nil, err
-			}
-			if reproduces(out) {
-				active = chunk
-				n = 2
-				reducedInThisPass = true
+			if ok {
+				active, n, reduced = append([]string{}, chunk...), 2, true
 				break
 			}
 		}
-		if reducedInThisPass {
+		if reduced {
 			continue
 		}
 
-		// Try each complement (active minus one chunk).
-		for i, chunk := range chunks {
+		// Reduce to complement: remove one chunk. (At n == 2 the complements equal the
+		// chunks already tried; the result cache answers them without spending budget.)
+		for _, chunk := range chunks {
 			if len(chunk) == 0 {
 				continue
 			}
@@ -61,78 +59,52 @@ func ddmin(ctx context.Context, exec Executor, all []string, t *budgetTracker, o
 			if len(complement) == 0 {
 				continue
 			}
-			if reason := t.exhausted(); reason != "" {
-				return finish(ctx, exec, t, active, reason, order != nil)
+			ok, h := s.attempt(complement)
+			if h != nil {
+				return h
 			}
-			out, err := t.run(ctx, exec, complement)
-			if err != nil {
-				return nil, err
-			}
-			if reproduces(out) {
-				active = complement
-				n = max(n-1, 2)
-				reducedInThisPass = true
-				_ = i
+			if ok {
+				active, n, reduced = complement, max(n-1, 2), true
 				break
 			}
 		}
-		if reducedInThisPass {
+		if reduced {
 			continue
 		}
 
 		if n >= len(active) {
-			break // cannot shrink further at any granularity: 1-minimal (within accepted conditions)
+			return nil // cannot shrink further at any granularity: 1-minimal
 		}
 		n = min(n*2, len(active))
 	}
-
-	return finish(ctx, exec, t, active, StopMinimal, order != nil)
 }
 
-// sequentialRemoval tries removing one intervention at a time, left to right, keeping
-// the removal permanently whenever the remaining set still reproduces the failure.
-// This is the plain baseline distinct from ddmin's binary-split strategy.
-func sequentialRemoval(ctx context.Context, exec Executor, all []string, t *budgetTracker) (*Result, error) {
+// sequential tries removing one intervention at a time, left to right, keeping the
+// removal permanently whenever the remainder still reproduces the failure (confirmed
+// 3/3). It repeats full passes until a pass removes nothing (ADR-005: "с повторным
+// проходом после принятого удаления"), so the result is 1-minimal; removal of the last
+// element (the empty set) is tried too.
+func (s *session) sequential(all []string) *halt {
 	active := append([]string{}, all...)
-	for i := 0; i < len(active); {
-		if reason := t.exhausted(); reason != "" {
-			return finish(ctx, exec, t, active, reason, false)
-		}
-		candidate := make([]string, 0, len(active)-1)
-		candidate = append(candidate, active[:i]...)
-		candidate = append(candidate, active[i+1:]...)
-		if len(candidate) == 0 {
+	for changed := true; changed; {
+		changed = false
+		for i := 0; i < len(active); {
+			candidate := make([]string, 0, len(active)-1)
+			candidate = append(candidate, active[:i]...)
+			candidate = append(candidate, active[i+1:]...)
+			ok, h := s.attempt(candidate)
+			if h != nil {
+				return h
+			}
+			if ok {
+				active = candidate // stays at index i
+				changed = true
+				continue
+			}
 			i++
-			continue
-		}
-		out, err := t.run(ctx, exec, candidate)
-		if err != nil {
-			return nil, err
-		}
-		if reproduces(out) {
-			active = candidate // removal confirmed-redundant for now; stays at index i
-			continue
-		}
-		i++
-	}
-	return finish(ctx, exec, t, active, StopMinimal, false)
-}
-
-func finish(ctx context.Context, exec Executor, t *budgetTracker, active []string, reason StopReason, dependencyAware bool) (*Result, error) {
-	algo := string(AlgoDDMin)
-	if dependencyAware {
-		algo = string(AlgoDependencyAware)
-	}
-	if reason == StopMinimal {
-		ok, unstable, err := confirm(ctx, exec, t, active)
-		if err != nil {
-			return &Result{Accepted: active, RunsUsed: t.runsUsed, StopReason: StopBudgetRuns, Algorithm: algo}, nil
-		}
-		if !ok {
-			return &Result{Accepted: active, RunsUsed: t.runsUsed, StopReason: StopUnstable, Unstable: unstable, Algorithm: algo}, nil
 		}
 	}
-	return &Result{Accepted: active, RunsUsed: t.runsUsed, StopReason: reason, Algorithm: algo}, nil
+	return nil
 }
 
 func split(s []string, n int) [][]string {
@@ -169,18 +141,4 @@ func without(s, remove []string) []string {
 		}
 	}
 	return out
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
