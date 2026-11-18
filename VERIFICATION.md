@@ -9,7 +9,7 @@
 - SVG: все три диаграммы отрендерены и просмотрены.
 - UX JavaScript: проверены переходы failure → reduction → compare → export, маркировка synthetic, блокировка сокращения при PASS и reset в DOM-имитации.
 - Полная браузерная проверка макета не выполнена: в среде отсутствует браузер, загрузка Chromium не удалась. Перед показом открыть HTML в Chrome/Edge и проверить настольное и мобильное окно.
-- Backend, Docker-стенд и алгоритмы не реализованы; нагрузочные и интеграционные тесты не проводились.
+- Backend, Docker-стенд и алгоритмы не реализованы; нагрузочные и интеграционные тесты не проводились. (устарело, см. обновления ниже: backend и стенд реализованы и запускались 14 и 18 ноября 2026; нагрузочные тесты по-прежнему не проводились.)
 
 Это проверка артефактов подготовки, а не отчёт о валидации исследовательских гипотез.
 
@@ -24,8 +24,66 @@ Backend и Docker-стенд реализованы (Go: controller/proxy/runner
 - `config/scenarios/multi-fault-demo.json` (два вмешательства, одно из них — не влияющий на инвариант decoy) после `POST /api/runs/{id}/reduce` с `algorithm=ddmin` корректно сокращается до одного необходимого вмешательства за 5 реальных прогонов против живого стенда.
 - Конкурентный `POST /api/runs` при занятом стенде возвращает 409, а не второй запуск.
 - Невалидный сценарий (неизвестный тип action) отклоняется `POST /api/scenarios` с 422 до какой-либо активности на стенде.
-- Автоматические интеграционные тесты: `go test -tags=integration ./tests/integration/...` — 4/4 PASS на момент записи.
+- Автоматические интеграционные тесты: `go test -tags=integration ./tests/integration/...` — 4/4 PASS на момент записи 14 ноября (на 18 ноября базовый набор — 5/5 PASS, плюс новые тесты, см. обновление от 18 ноября ниже).
 
 Это проверка реализации (backend работает так, как описано в контракте), а не защита исследовательских гипотез из tests/EVALUATION.md: полный шестисценарный сравнительный эксперимент (ddmin vs dependency-aware, 10 повторов на сценарий, воспроизводимость 30/30 с Wilson CI) не проводился, `tests/results.csv` не заполнен -- см. `scripts/validate_package.py` ("Do not fabricate results").
 
 Web UI (React+TypeScript+Vite) реализован в `src/web` и проверен тем же способом — реальным запуском в браузере против живого стенда (основной путь: загрузка сценария → запуск → таймлайн с `dropped`/`parent_event_id` → reduce → export; нехэппи-пути: невалидный сценарий, STAND_BUSY 409). При этой проверке нашёлся и был исправлен настоящий дефект контракта API: `POST /api/runs` не отличал отсутствующее поле `active_intervention_ids` от явного пустого списка, из-за чего нельзя было запросить прогон с нулём активных вмешательств (нужен для сравнения с исправленной версией, FR11). Исправлено в `src/controller/api.go`; регрессия закрыта тестом `TestZeroActiveInterventions_RunsCleanBaseline`. Мобильная раскладка 390 px и реальный UX-пилот с участниками (docs/08-ux.md) не проверялись.
+
+## Обновление: 18 ноября 2026 — DEMO-52 (runner / oracle / reducer: FR02, FR06, FR08, FR09, NFR06)
+
+Среда: реальный стенд Docker Compose на одной машине; Go 1.27 локально и golang:1.25 в образе. Это проверка реализации на демонстрационном стенде, а не эксперимент из tests/EVALUATION.md. Код ещё не проверен Алдияром, Асхатом и руководителем; интервью и отзыв руководителя не проводились и не записывались.
+
+### Что запускалось
+
+- До изменений: `go build` и `go vet` без замечаний, юнит-тесты ok, интеграционные 5/5 PASS.
+- После изменений: `go test -count=1 ./...` — все пакеты ok; `go test -race -count=3` — без замечаний; `go test -tags=integration -count=1 ./tests/integration/...` — 5 прежних тестов и новые из `tests/integration/acceptance_test.go` PASS (около 32 с).
+- Новые юнит-тесты верхнего уровня: reducer 27 (всего 33), controller 23 (пакетных тестов раньше не было; фейки хранилища, runner, oracle, proxy и SUT в памяти), oracle 2, proxy 2 новых (всего 8). Итого 66 тестов верхнего уровня в этих четырёх пакетах; в среде при подготовке этой записи юнит-прогон повторён и совпал.
+- Новые интеграционные тесты (против живого стенда): `TestOracle_ClassifiesOutcomes` (4 подтеста), `TestReduction_AllAlgorithms_ConfirmedBudgetedRepeatable` (2 сценария × 3 алгоритма), `TestCancel_RunAndReduction` (3 подтеста), `TestReset_ClearsPreviousRunState` (проверка через `docker compose exec psql`), `TestReduce_UnknownAlgorithmRejected`.
+- Проверка мутациями: 15 мутаций на отдельной копии кода, все «убиты» новыми тестами. Часть «убийств» могла быть ошибкой компиляции, а не падением теста; это не полноценный mutation-score.
+
+### Три дефекта, воспроизведённые на нетронутом стенде до исправления
+
+1. R3: второй `POST /api/runs/{id}/reduce` по тому же run возвращал 500 `illegal transition COMPLETED -> RESETTING` (ID кандидатов повторялись и переиспользовали терминальное состояние). Исправлено: уникальные ID кандидатов `<run>-<reduction>-c<N>`; повторное сокращение одного и того же run теперь работает (проверено вживую).
+2. O1: сценарий с `http_error 503` на обе попытки платежа (платёж не создан ни разу) классифицировался как ORIGINAL_FAILURE. Исправлено: oracle отличает `duplicate` (count > 1 → ORIGINAL_FAILURE) от `missing` (count = 0 → OTHER_FAILURE).
+3. O3: селектор, который никогда не срабатывает (попытка 5), давал PASS. Исправлено: proxy возвращает число срабатываний каждого вмешательства, при числе совпадений != 1 исход INAPPLICABLE.
+
+### Что изменено в поведении (проверяемо по коду)
+
+- Классификация (`classify`, src/controller/orchestrator.go): TIMEOUT > INAPPLICABLE > ORIGINAL_FAILURE > OTHER_FAILURE > PASS. Таймаут checkout 15 с; orders теперь передаёт контекст запроса, поэтому прерванный checkout перестаёт повторять запросы.
+- Runner: хеш seed-файла сверяется перед каждым Reset; после коммита число строк трёх таблиц сверяется с состоянием внутри транзакции; любая ошибка Reset прерывает запуск до активации proxy и checkout (INFRA_ERROR, не вердикт о приложении).
+- Reducer: исходный полный набор подтверждается 3/3 (1 пробный + 3 подтверждающих запуска); каждый принятый кандидат подтверждается 3/3, нестабильный отклоняется с пометкой Unstable; всегда отдаётся последний подтверждённый набор; бюджет списывается за каждое исполнение, включая подтверждения и проверку пустого набора; попадания в кэш бесплатны (`cache_hits`); `Budget.Clamp` ограничивает 100 запусками / 10 минутами; первая достигнутая граница даёт `BUDGET_EXHAUSTED_RUNS` или `BUDGET_EXHAUSTED_SECONDS` (исполнение, прерванное дедлайном, считается бюджетной остановкой, а не infra-ошибкой); пустой набор проверяется перед объявлением результата минимальным; допустимость кандидатов (`depends_on` сценария) одинакова для ddmin, sequential и dependency_aware, у dependency_aware отличается только порядок; sequential повторяет проходы до неподвижной точки; при infra-ошибке и отмене возвращается частичный результат (`INFRA_ERROR` / `CANCELLED`), а не отбрасывается.
+- Cancel (FR09): `POST /api/runs/{id}/cancel` останавливает и сокращение в процессе (stop_reason `CANCELLED`, последний подтверждённый набор сохраняется, родительский run не меняется); для завершённого run возвращает 200 `{"status":"not_running","state":...}` вместо ложного подтверждения.
+- API: ответ `reduce` содержит `reduction_id, run_id, state, confirmed, one_minimal, unstable, runs_used, max_runs, max_seconds, confirmation_runs, cache_hits, skipped_invalid, stop_reason, error?, duration_ms` (надмножество прежних полей; web UI не менялся и совместим); неизвестный алгоритм → 422 `UNKNOWN_ALGORITHM`; новый `GET /api/reductions/{id}`; новая таблица `reductions` в deploy/sql/metadata_schema.sql и идемпотентно создаётся `store.EnsureSchema` при старте контроллера (чтобы работали существующие volume).
+
+### Результаты на живом стенде (18 ноября 2026)
+
+- `config/scenario.example.json`: ORIGINAL_FAILURE; в таблице payments две записи `succeeded` для заказа; проверка: expected 1, actual 2; журнал proxy: попытка 1 forwarded 200, затем fault/dropped (действие fault-1), попытка 2 forwarded. Сокращение: ddmin `runs_used=5` (1 пробный + 3 подтверждающих полного набора + 1 проверка пустого набора → PASS), принято [fault-1], minimal; sequential 5, dependency_aware 5; сокращённый набор воспроизводит 3/3.
+- `config/scenarios/multi-fault-demo.json`: ORIGINAL_FAILURE с обоими вмешательствами; ddmin `runs_used=9` (4 для полного набора, чанк [fault-1] 1+3, проверка пустого набора → PASS), принято [fault-1], decoy отброшен; sequential 10, dependency_aware 9; сокращённый набор воспроизводит 3/3 ORIGINAL_FAILURE; повторное сокращение того же run работает.
+- NFR06: бюджет сценария `runs=3` → остановка `BUDGET_EXHAUSTED_RUNS` при `runs_used=3/3`, `confirmed=false`, полный набор сохранён; `seconds=4` → `BUDGET_EXHAUSTED_SECONDS` через 4,011 с. Потолок 100 запусков / 10 минут вживую не доводился до срабатывания (проверен только юнит-тестами через `Clamp`).
+- FR09: выполняющийся run → CANCELLED без исхода; сокращение, отменённое посреди кандидата → stop_reason `CANCELLED`, родительский run остаётся ORIGINAL_FAILURE, стенд пригоден для следующего запуска.
+
+Это результаты отдельных запусков на демо-стенде, а не серия повторов с доверительными интервалами; `tests/results.csv` по-прежнему содержит только заголовок.
+
+### Таблица приёмки
+
+| Требование | Где реализовано | Как проверено | Результат |
+|---|---|---|---|
+| FR02 Сброс стенда | src/runner/runner.go (`Reset`), src/controller/orchestrator.go (`executeOnce`) | Юнит: ошибка Reset прерывает запуск до proxy/checkout (`TestExecuteOnce_ResetFailure_NothingElseRuns_FR02`). Вживую: `TestReset_ClearsPreviousRunState`. Отдельного автотеста на подмену seed-файла и на сверку числа строк нет: проверено чтением кода и косвенно успешными прогонами. | PASS с ограничениями: сброс — SQL-TRUNCATE трёх таблиц, а не пересоздание volume; `deploy/sql/seed.sql` намеренно пуст, поэтому «восстановление seed» = пустые таблицы |
+| FR06 Oracle | src/oracle/oracle.go, `classify` в orchestrator.go | Юнит: oracle 2, controller (`TestClassify*`, infra-ошибка oracle не вердикт). Вживую: `TestOracle_ClassifiesOutcomes` — двойной платёж → ORIGINAL_FAILURE (expected 1, actual 2), платёж не создан → OTHER_FAILURE, без сбоя → PASS, селектор не сработал → INAPPLICABLE. TIMEOUT проверен только юнит-тестами. | PASS для PASS / ORIGINAL_FAILURE / OTHER_FAILURE / INAPPLICABLE; TIMEOUT — только юнит (вживую не вызывался: демо-клиент orders обрывает вызов через 3 с → 502 → OTHER_FAILURE, для живых 15 с нужен другой SUT) |
+| FR08 Сокращение | src/reducer/*.go, `Reduce` в orchestrator.go | Юнит: reducer 33, controller `TestReduce_*`. Вживую: 2 сценария × 3 алгоритма (`TestReduction_AllAlgorithms_ConfirmedBudgetedRepeatable`), сокращённый набор 3/3. | PASS на двух демо-сценариях. «Минимальный» = 1-minimal относительно допустимых кандидатов, проверенных условий и пустого набора, не глобальный минимум; 3/3 не доказывает детерминизм. Сравнительный эксперимент из tests/EVALUATION.md не проводился |
+| FR09 Отмена | `Cancel` в orchestrator.go, `cancelRun` в api.go | Юнит: `TestExecuteRun_CancelWhileSUTBlocks_*`, `TestReduce_CancelDuringReduce_*`. Вживую: `TestCancel_RunAndReduction` (3 подтеста). | PASS: CANCELLED, не PASS; новые кандидаты не запускаются; стенд освобождается |
+| NFR06 Бюджет | `Budget.Clamp`, `session.execute` в src/reducer/reducer.go | Юнит: бюджет с учётом подтверждений, `Clamp` до 100 / 10 мин (`TestReduce_BudgetClampedTo100RunsAnd600Seconds`). Вживую: бюджет сценария `runs=3` и `seconds=4` (результаты выше). | PASS для границ по запускам и по секундам при малых бюджетах сценария; сам потолок 100 / 10 мин вживую не достигался |
+
+### Известные ограничения
+
+1. TIMEOUT проверен только юнит-тестами; живой 15-секундный таймаут не вызывался.
+2. В таблице `candidates` колонки `accepted` и `confirmations` по-прежнему пишутся как false / 0; авторитетная запись — строка `reductions` и ответ API. Колонка `runs.runs_consumed` не используется.
+3. `deploy/sql/seed.sql` пуст намеренно; `seed_hash` в обоих обязательных сценариях — заглушка `TO_BE_COMPUTED` и не сравнивается с `SeedHash` runner (FR07 вне объёма этой задачи). Поле `"kind": "example-not-executable"` в сценариях не менялось, хотя они выполняются.
+4. Сброс — SQL-truncate трёх своих таблиц, а не пересоздание Docker volume (как и раньше).
+5. 1-minimal относится только к допустимым кандидатам, проверенным условиям и пустому набору; глобальный минимум не заявляется. Подтверждение 3/3 не доказывает детерминизм.
+6. Один процесс, одновременно один запуск; dependency_aware использует только `LeafFirstOrder` для порядка.
+7. Web UI не менялся: новые поля ответа не показываются, для `stop_reason` `INFRA_ERROR` в `explainStopReason` может не быть текста.
+8. На macOS обращаться к контроллеру по `127.0.0.1`, а не `localhost` (на :7000 по IPv6/wildcard слушает AirPlay).
+9. Проверка мутациями и живые прогоны выполнены в одной среде; это не полный эксперимент tests/EVALUATION.md.
+10. `Options.Valid` не применяется к полному набору (он берётся из уже проверенного сценария).
