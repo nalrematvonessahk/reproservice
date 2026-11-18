@@ -84,6 +84,17 @@ func (a *API) createRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	known := make(map[string]bool, len(sc.Interventions))
+	for _, iv := range sc.Interventions {
+		known[iv.ID] = true
+	}
+	for _, id := range active {
+		if !known[id] {
+			httpx.WriteError(w, 422, "UNKNOWN_INTERVENTION", "active_intervention_ids contains an id not defined in this scenario version: "+id, corrID())
+			return
+		}
+	}
+
 	if !a.orch.TryAcquire() {
 		httpx.WriteError(w, 409, "STAND_BUSY", "another run is currently using the stand", corrID())
 		return
@@ -105,7 +116,7 @@ func (a *API) createRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go a.orch.ExecuteRun(run, sc)
+	a.orch.StartRun(run, sc) // registers cancel synchronously, then runs in a goroutine
 	httpx.WriteJSON(w, 202, map[string]string{"run_id": run.RunID})
 }
 

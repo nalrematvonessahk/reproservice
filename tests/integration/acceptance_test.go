@@ -302,3 +302,22 @@ func TestReduce_UnknownAlgorithmRejected(t *testing.T) {
 		t.Fatalf("expected 422, got %d %v", status, out)
 	}
 }
+
+// A client typo in active_intervention_ids is a validation error, not a scenario verdict.
+func TestCreateRun_UnknownInterventionIDRejected(t *testing.T) {
+	vid := createVersion(t, "../../config/scenario.example.json")
+	b, _ := json.Marshal(map[string]any{"version_id": vid, "idempotency_key": fmt.Sprintf("acc-unk-%d", time.Now().UnixNano()),
+		"active_intervention_ids": []string{"fault-1", "fault-l"}})
+	status, out := postJSON(t, "/api/runs", b)
+	if status != 422 || out["code"] != "UNKNOWN_INTERVENTION" {
+		t.Fatalf("expected 422 UNKNOWN_INTERVENTION, got %d %v", status, out)
+	}
+}
+
+// Two interventions sharing one selector are rejected at import (ambiguous match).
+func TestInvalidScenario_DuplicateSelectorRejected(t *testing.T) {
+	status, _ := postJSON(t, "/api/scenarios", scenarioJSON("acc-dupsel", drop("fault-1"), drop("fault-2")))
+	if status != 422 {
+		t.Fatalf("expected 422 for duplicate selectors, got %d", status)
+	}
+}

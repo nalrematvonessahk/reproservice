@@ -133,6 +133,7 @@ func (sc *Scenario) Validate() error {
 		return fmt.Errorf("scenario has no interventions")
 	}
 	ids := map[string]bool{}
+	selectors := map[string]string{}
 	for _, iv := range sc.Interventions {
 		if err := iv.Validate(); err != nil {
 			return err
@@ -141,6 +142,12 @@ func (sc *Scenario) Validate() error {
 			return fmt.Errorf("duplicate intervention id %q", iv.ID)
 		}
 		ids[iv.ID] = true
+		// Two interventions on the same selector would be an ambiguous match (FR03):
+		// the proxy can apply only one, so the other could never be observed to fire.
+		if other, dup := selectors[iv.Selector.Key()]; dup {
+			return fmt.Errorf("interventions %q and %q share the same selector (ambiguous match)", other, iv.ID)
+		}
+		selectors[iv.Selector.Key()] = iv.ID
 	}
 	for _, iv := range sc.Interventions {
 		for _, dep := range iv.DependsOn {

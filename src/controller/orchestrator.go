@@ -127,10 +127,23 @@ func (o *Orchestrator) Cancel(runID string) bool {
 // The caller must already hold the stand (via a successful TryAcquire) before
 // starting this goroutine; ExecuteRun releases it when the run finishes.
 func (o *Orchestrator) ExecuteRun(run *schema.Run, sc *schema.Scenario) {
-	defer o.Release()
-
 	ctx, cancel := context.WithCancel(context.Background())
-	defer o.registerCancel(run.RunID, cancel)()
+	o.runRegistered(ctx, o.registerCancel(run.RunID, cancel), run, sc)
+}
+
+// StartRun registers the run's cancel function BEFORE returning and then executes the
+// run in its own goroutine. Registering synchronously closes the window in which a
+// POST /cancel arriving right after the 202 would find nothing to cancel (FR09).
+// The caller must hold the stand (TryAcquire).
+func (o *Orchestrator) StartRun(run *schema.Run, sc *schema.Scenario) {
+	ctx, cancel := context.WithCancel(context.Background())
+	unregister := o.registerCancel(run.RunID, cancel)
+	go o.runRegistered(ctx, unregister, run, sc)
+}
+
+func (o *Orchestrator) runRegistered(ctx context.Context, unregister func(), run *schema.Run, sc *schema.Scenario) {
+	defer o.Release()
+	defer unregister()
 
 	outcome, detail, err := o.executeOnce(ctx, run.RunID, sc, run.ActiveIDs)
 	finalCtx := context.Background() // the run's own ctx may already be cancelled
@@ -304,10 +317,7 @@ func interventionsByID(all []schema.Intervention, ids []string) []schema.Interve
 // depends_on prerequisites in the candidate too. It is applied identically to all
 // algorithms; observed trace links are never used here.
 func validCandidate(sc *schema.Scenario) func([]string) bool {
-	deps := map[string][]string{}
-	for _, iv := range sc.Interventions {
-		deps[iv.ID] = iv.DependsOn
-	}
+	deps := dependsOf(sc)
 	return func(ids []string) bool {
 		in := make(map[string]bool, len(ids))
 		for _, id := range ids {
@@ -322,6 +332,16 @@ func validCandidate(sc *schema.Scenario) func([]string) bool {
 		}
 		return true
 	}
+}
+
+// dependsOf is the single source of the explicit prerequisite data used both for
+// candidate validity and for dependency-aware ordering (ADR-005).
+func dependsOf(sc *schema.Scenario) map[string][]string {
+	deps := make(map[string][]string, len(sc.Interventions))
+	for _, iv := range sc.Interventions {
+		deps[iv.ID] = iv.DependsOn
+	}
+	return deps
 }
 
 // Reduce runs one reduction of parent's interventions with the chosen algorithm and
@@ -343,11 +363,7 @@ func (o *Orchestrator) Reduce(ctx context.Context, parent *schema.Run, sc *schem
 
 	opts := reducer.Options{Valid: validCandidate(sc)}
 	if algo == reducer.AlgoDependencyAware {
-		deps := map[string][]string{}
-		for _, iv := range sc.Interventions {
-			deps[iv.ID] = iv.DependsOn
-		}
-		opts.Order = reducer.LeafFirstOrder(deps)
+		opts.Order = reducer.LeafFirstOrder(dependsOf(sc))
 	}
 
 	exec := &candidateExecutor{o: o, scenario: sc, versionID: parent.VersionID, parentRunID: parent.RunID, reductionID: rec.ReductionID}
@@ -393,10 +409,14 @@ func (c *candidateExecutor) Execute(ctx context.Context, interventionIDs []strin
 		RunID: candidateRunID, ScenarioID: c.scenario.ID, VersionID: c.versionID,
 		IdempotencyKey: candidateRunID, State: schema.StateValidating, ActiveIDs: interventionIDs,
 	}
-	bg := context.Background()
-	if _, err := c.o.store.CreateRun(bg, run); err != nil {
+	if _, err := c.o.store.CreateRun(ctx, run); err != nil {
 		return "", err
 	}
+	// Bookkeeping after the execution must still be recorded when ctx is already
+	// cancelled (cancel / wall-clock budget), but it is bounded so a stalled
+	// metadata DB cannot hold the stand past the NFR06 budget or ignore Cancel.
+	bg, done := context.WithTimeout(context.WithoutCancel(ctx), bookkeepingTimeout)
+	defer done()
 	outcome, detail, err := c.o.executeOnce(ctx, candidateRunID, c.scenario, interventionIDs)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -411,3 +431,5 @@ func (c *candidateExecutor) Execute(ctx context.Context, interventionIDs []strin
 	c.o.store.InsertCandidate(bg, candidateRunID, c.reductionID, c.parentRunID, interventionIDs, outcome, false, 0)
 	return reducer.Outcome(outcome), nil
 }
+
+const bookkeepingTimeout = 10 * time.Second

@@ -54,13 +54,15 @@ func (p *ProxyClient) Deactivate(runID string) (map[string]int, error) {
 		return nil, fmt.Errorf("proxyclient: deactivate returned %d", resp.StatusCode)
 	}
 	var out struct {
-		Fired map[string]int `json:"fired"`
+		Fired *map[string]int `json:"fired"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("proxyclient: decode deactivate response: %w", err)
 	}
-	if out.Fired == nil {
-		out.Fired = map[string]int{}
+	if out.Fired == nil || *out.Fired == nil {
+		// An incompatible/older proxy: surface an infrastructure error, never a
+		// scenario verdict (every intervention would otherwise look "not matched").
+		return nil, fmt.Errorf("proxyclient: deactivate response has no match counts (incompatible proxy build?)")
 	}
-	return out.Fired, nil
+	return *out.Fired, nil
 }
