@@ -121,7 +121,18 @@ type Assertion struct {
 	Actual      string  `json:"actual"`
 	Violated    bool    `json:"violated"`
 	InfraError  bool    `json:"infra_error"`
+	// Kind says HOW the invariant was violated ("duplicate" or "missing"); empty when
+	// not violated. It is not persisted: the orchestrator uses it to tell the original
+	// business failure (a duplicate charge) from an unrelated one (no charge at all).
+	Kind ViolationKind `json:"kind,omitempty"`
 }
+
+type ViolationKind string
+
+const (
+	ViolationDuplicate ViolationKind = "duplicate"
+	ViolationMissing   ViolationKind = "missing"
+)
 
 // Run is one execution of a scenario version against the stand.
 type Run struct {
@@ -144,4 +155,26 @@ type APIError struct {
 	Message       string `json:"message"`
 	Field         string `json:"field,omitempty"`
 	CorrelationID string `json:"correlation_id"`
+}
+
+// Reduction is the persisted and API-visible result of one reduction (FR08, NFR06):
+// the last candidate confirmed 3/3, the budget actually consumed, and why it stopped.
+type Reduction struct {
+	ReductionID      string   `json:"reduction_id"`
+	RunID            string   `json:"run_id"`
+	Algorithm        string   `json:"algorithm"`
+	State            string   `json:"state"` // RUNNING | COMPLETED
+	Accepted         []string `json:"accepted_intervention_ids"`
+	Confirmed        bool     `json:"confirmed"`
+	OneMinimal       bool     `json:"one_minimal"`
+	Unstable         bool     `json:"unstable"`
+	RunsUsed         int      `json:"runs_used"`
+	MaxRuns          int      `json:"max_runs"`
+	MaxSeconds       int      `json:"max_seconds"`
+	ConfirmationRuns int      `json:"confirmation_runs"`
+	CacheHits        int      `json:"cache_hits"`
+	SkippedInvalid   int      `json:"skipped_invalid"`
+	StopReason       string   `json:"stop_reason"`
+	Error            string   `json:"error,omitempty"`
+	DurationMs       int64    `json:"duration_ms"`
 }

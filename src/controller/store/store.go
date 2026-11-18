@@ -189,3 +189,52 @@ func (s *Store) InsertCandidate(ctx context.Context, candidateID, reductionID, r
 		candidateID, reductionID, runID, ids, outcome, accepted, confirmations)
 	return err
 }
+
+// reductionsDDL is also present in deploy/sql/metadata_schema.sql (fresh volumes);
+// EnsureSchema applies it at controller start so an existing metadata volume, whose
+// init script never re-runs, gets the table too. Keep the two in sync.
+const reductionsDDL = `
+CREATE TABLE IF NOT EXISTS reductions (
+    reduction_id TEXT PRIMARY KEY,
+    run_id       TEXT NOT NULL REFERENCES runs(run_id),
+    state        TEXT NOT NULL,
+    stop_reason  TEXT,
+    body         JSONB NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+)`
+
+func (s *Store) EnsureSchema(ctx context.Context) error {
+	_, err := s.pool.Exec(ctx, reductionsDDL)
+	return err
+}
+
+// SaveReduction upserts the reduction record (RUNNING at start, COMPLETED at the end).
+func (s *Store) SaveReduction(ctx context.Context, r schema.Reduction) error {
+	body, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO reductions (reduction_id, run_id, state, stop_reason, body)
+		VALUES ($1,$2,$3,nullif($4,''),$5)
+		ON CONFLICT (reduction_id) DO UPDATE SET state=$3, stop_reason=nullif($4,''), body=$5, updated_at=now()`,
+		r.ReductionID, r.RunID, r.State, r.StopReason, body)
+	return err
+}
+
+func (s *Store) GetReduction(ctx context.Context, reductionID string) (*schema.Reduction, error) {
+	var body []byte
+	err := s.pool.QueryRow(ctx, `SELECT body FROM reductions WHERE reduction_id=$1`, reductionID).Scan(&body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	var r schema.Reduction
+	if err := json.Unmarshal(body, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}

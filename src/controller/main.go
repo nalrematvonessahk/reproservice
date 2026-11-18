@@ -52,6 +52,9 @@ func main() {
 	}
 	or := oracle.New(testAppPool)
 	st := store.New(metaPool)
+	if err := st.EnsureSchema(ctx); err != nil {
+		log.Fatalf("controller: ensure metadata schema: %v", err)
+	}
 	px := NewProxyClient(envDefault("PROXY_ADMIN_URL", "http://localhost:9000"))
 	sut := NewSUTClient(envDefault("ORDERS_URL", "http://localhost:8081"))
 

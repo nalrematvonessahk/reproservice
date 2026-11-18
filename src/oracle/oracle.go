@@ -40,10 +40,26 @@ func (o *Oracle) paymentExactlyOnce(ctx context.Context, orderID string) (schema
 	if err != nil {
 		return schema.Assertion{InvariantID: "payment_exactly_once", InfraError: true}, fmt.Errorf("oracle: query payments: %w", err)
 	}
-	return schema.Assertion{
+	return EvaluatePaymentExactlyOnce(count), nil
+}
+
+// EvaluatePaymentExactlyOnce is the pure verdict for payment_exactly_once given the
+// number of succeeded payments for one order. The invariant is violated whenever the
+// count is not exactly 1, but only count > 1 is the *double payment* this invariant
+// exists to catch ("duplicate"); count == 0 ("missing") means the charge never
+// happened -- a different failure that callers must not mistake for the original bug.
+func EvaluatePaymentExactlyOnce(count int) schema.Assertion {
+	a := schema.Assertion{
 		InvariantID: "payment_exactly_once",
 		Expected:    "1",
 		Actual:      fmt.Sprintf("%d", count),
 		Violated:    count != 1,
-	}, nil
+	}
+	switch {
+	case count > 1:
+		a.Kind = schema.ViolationDuplicate
+	case count < 1:
+		a.Kind = schema.ViolationMissing
+	}
+	return a
 }

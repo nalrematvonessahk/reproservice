@@ -40,6 +40,7 @@ type activeRun struct {
 	mu            sync.Mutex
 	runID         string
 	interventions map[string]schema.Intervention // keyed by Selector.Key()
+	fired         map[string]int                 // intervention ID -> number of selector matches this run (FR03)
 }
 
 func (a *activeRun) activate(runID string, ivs []schema.Intervention) error {
@@ -54,18 +55,32 @@ func (a *activeRun) activate(runID string, ivs []schema.Intervention) error {
 	}
 	a.runID = runID
 	a.interventions = m
+	a.fired = make(map[string]int, len(ivs))
+	for _, iv := range ivs {
+		a.fired[iv.ID] = 0
+	}
 	return nil
 }
 
 func (a *activeRun) deactivate(runID string) error {
+	_, err := a.finish(runID)
+	return err
+}
+
+// finish ends the run's fault scope and returns how many times each activated
+// intervention's selector matched (0 = the event never occurred, >1 = ambiguous);
+// the controller turns either into INAPPLICABLE.
+func (a *activeRun) finish(runID string) (map[string]int, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.runID != runID {
-		return fmt.Errorf("run %s is not the active run", runID)
+		return nil, fmt.Errorf("run %s is not the active run", runID)
 	}
+	fired := a.fired
 	a.runID = ""
 	a.interventions = nil
-	return nil
+	a.fired = nil
+	return fired, nil
 }
 
 func (a *activeRun) lookup(runID string, sel schema.Selector) (schema.Intervention, bool) {
@@ -75,6 +90,9 @@ func (a *activeRun) lookup(runID string, sel schema.Selector) (schema.Interventi
 		return schema.Intervention{}, false
 	}
 	iv, ok := a.interventions[sel.Key()]
+	if ok {
+		a.fired[iv.ID]++
+	}
 	return iv, ok
 }
 
@@ -302,11 +320,12 @@ func (s *server) handleAdminActivate(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleAdminDeactivate(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("run_id")
-	if err := s.run.deactivate(runID); err != nil {
+	fired, err := s.run.finish(runID)
+	if err != nil {
 		httpx.WriteError(w, 409, "NOT_ACTIVE_RUN", err.Error(), "")
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]string{"status": "deactivated"})
+	httpx.WriteJSON(w, 200, map[string]any{"status": "deactivated", "fired": fired})
 }
 
 func main() {
