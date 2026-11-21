@@ -130,7 +130,7 @@ export default function RunPanel({
           <button className="link-button" onClick={() => setShowJson((v) => !v)}>
             {showJson ? "Hide raw run JSON" : "Show raw run JSON"}
           </button>
-          {showJson && <pre>{JSON.stringify(run, null, 2)}</pre>}
+          {showJson && <pre tabIndex={0} role="region" aria-label="Raw run JSON">{JSON.stringify(run, null, 2)}</pre>}
         </>
       )}
     </div>
