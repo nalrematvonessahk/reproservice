@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { ApiError, createScenario } from "../api";
+import { createScenario, describeError } from "../api";
+import type { ErrorView } from "../api";
+import { normalizeScenario } from "../scenario";
 import { BUILTIN_EXAMPLES } from "../examples";
 import type { Scenario } from "../types";
 
@@ -12,9 +14,7 @@ export default function ScenarioPanel({ onLoaded, disabled }: Props) {
   const [text, setText] = useState(() => JSON.stringify(BUILTIN_EXAMPLES[0].scenario, null, 2));
   const [exampleKey, setExampleKey] = useState(BUILTIN_EXAMPLES[0].key);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ code: string; message: string; field?: string; correlation_id: string } | null>(
-    null
-  );
+  const [error, setError] = useState<ErrorView | null>(null);
 
   function pickExample(key: string) {
     setExampleKey(key);
@@ -38,16 +38,16 @@ export default function ScenarioPanel({ onLoaded, disabled }: Props) {
       });
       return;
     }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      setError({ code: "INVALID_JSON", message: "A scenario must be a JSON object.", correlation_id: "" });
+      return;
+    }
     setBusy(true);
     try {
       const res = await createScenario(parsed);
-      onLoaded(parsed as Scenario, res.version_id);
+      onLoaded(normalizeScenario(parsed), res.version_id);
     } catch (e) {
-      if (e instanceof ApiError) {
-        setError({ code: e.body.code, message: e.body.message, field: e.body.field, correlation_id: e.body.correlation_id });
-      } else {
-        setError({ code: "UNKNOWN_ERROR", message: String(e), correlation_id: "" });
-      }
+      setError(describeError(e));
     } finally {
       setBusy(false);
     }
@@ -57,6 +57,8 @@ export default function ScenarioPanel({ onLoaded, disabled }: Props) {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
+    reader.onerror = () =>
+      setError({ code: "FILE_READ_ERROR", message: `Could not read ${file.name}.`, correlation_id: "" });
     reader.onload = () => {
       setText(String(reader.result ?? ""));
       setError(null);

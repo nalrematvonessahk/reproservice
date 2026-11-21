@@ -10,7 +10,7 @@ export function explainRun(state: RunState | null, outcome?: Outcome): string {
     case "VALIDATING":
       return "Checking the scenario before touching the stand.";
     case "RESETTING":
-      return "Restoring the seed database and verifying image digests / health checks.";
+      return "Restoring the seed database and verifying the seed and service health checks (image digests are recorded but not verified by the controller).";
     case "READY":
       return "Stand is reset and healthy; about to execute the checkout flow.";
     case "RUNNING":
@@ -54,7 +54,9 @@ export function explainStopReason(reason: string): string {
     case "ORIGINAL_NOT_REPRODUCED":
       return "The active intervention set never reproduced ORIGINAL_FAILURE in the first place, so there is nothing to reduce.";
     case "CANCELLED":
-      return "Reduction was cancelled before it finished.";
+      return "Reduction was cancelled before it finished. The set below is the best candidate confirmed before the cancel, not a final result.";
+    case "INFRA_ERROR":
+      return "The stand failed while a candidate was executing, so reduction stopped. This says nothing about which interventions matter.";
     default:
       return reason;
   }

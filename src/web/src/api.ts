@@ -6,6 +6,7 @@ import type {
   Run,
   RunEvent,
 } from "./types";
+import { isTerminalState } from "./types";
 
 // Controller base URL. The controller enables CORS for localhost/127.0.0.1 origins,
 // so the dev server (any port) can call it directly -- no proxy needed.
@@ -40,16 +41,59 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     });
   }
   if (!res.ok) {
-    let body: ApiErrorBody;
-    try {
-      body = await res.json();
-    } catch {
-      body = { code: "UNKNOWN_ERROR", message: await res.text().catch(() => res.statusText), correlation_id: "" };
-    }
-    throw new ApiError(res.status, body);
+    // Read the body once as text: calling res.json() first and res.text() after a
+    // parse failure throws "body already read" and loses the real error message.
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, parseErrorBody(res.status, res.statusText, text));
   }
   if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiError(res.status, {
+      code: "INVALID_RESPONSE",
+      message: `controller returned a non-JSON body for ${path}`,
+      correlation_id: "",
+    });
+  }
+}
+
+// The controller's error envelope is {code, message, field?, correlation_id}. Anything
+// else (a proxy's HTML 502 page, an empty body) is still turned into a usable error.
+export function parseErrorBody(status: number, statusText: string, text: string): ApiErrorBody {
+  try {
+    const j = JSON.parse(text) as Partial<ApiErrorBody> | null;
+    if (j && typeof j === "object" && typeof j.code === "string") {
+      return {
+        code: j.code,
+        message: j.message || statusText || `HTTP ${status}`,
+        field: j.field,
+        correlation_id: j.correlation_id ?? "",
+      };
+    }
+  } catch {
+    // not JSON -- fall through
+  }
+  return {
+    code: "HTTP_" + status,
+    message: text.trim().slice(0, 300) || statusText || `HTTP ${status}`,
+    correlation_id: "",
+  };
+}
+
+export interface ErrorView {
+  code: string;
+  message: string;
+  field?: string;
+  correlation_id: string;
+}
+
+// One place that turns anything thrown by the API client into something renderable.
+export function describeError(e: unknown): ErrorView {
+  if (e instanceof ApiError) {
+    return { code: e.body.code, message: e.body.message, field: e.body.field, correlation_id: e.body.correlation_id };
+  }
+  return { code: "UNKNOWN_ERROR", message: e instanceof Error ? e.message : String(e), correlation_id: "" };
 }
 
 export interface CreateScenarioResponse {
@@ -83,8 +127,9 @@ export function createRun(body: CreateRunRequest): Promise<CreateRunAccepted | R
   });
 }
 
-export function getRun(runId: string): Promise<Run> {
-  return request<Run>(`/api/runs/${runId}`);
+export async function getRun(runId: string): Promise<Run> {
+  const run = await request<Run>(`/api/runs/${encodeURIComponent(runId)}`);
+  return { ...run, active_intervention_ids: run.active_intervention_ids ?? [] };
 }
 
 export interface ListEventsResponse {
@@ -92,26 +137,49 @@ export interface ListEventsResponse {
   cursor: string;
 }
 
-export function listEvents(runId: string, cursor?: string): Promise<ListEventsResponse> {
+// The controller encodes "no events" as `"events": null` (a nil Go slice), not [].
+export async function listEvents(runId: string, cursor?: string): Promise<ListEventsResponse> {
   const qs = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
-  return request<ListEventsResponse>(`/api/runs/${runId}/events${qs}`);
+  const res = await request<Partial<ListEventsResponse>>(`/api/runs/${encodeURIComponent(runId)}/events${qs}`);
+  return { events: res.events ?? [], cursor: res.cursor ?? "" };
 }
 
 export function cancelRun(runId: string): Promise<{ status: string }> {
-  return request(`/api/runs/${runId}/cancel`, { method: "POST" });
+  return request(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
 }
 
-export function reduceRun(runId: string, algorithm: ReduceAlgorithm): Promise<ReduceResult> {
-  return request<ReduceResult>(`/api/runs/${runId}/reduce`, {
+export async function reduceRun(runId: string, algorithm: ReduceAlgorithm): Promise<ReduceResult> {
+  const res = await request<ReduceResult>(`/api/runs/${encodeURIComponent(runId)}/reduce`, {
     method: "POST",
     body: JSON.stringify({ algorithm }),
   });
+  // schema.Reduction.Accepted is a Go slice: nil is serialised as null.
+  return { ...res, accepted_intervention_ids: res.accepted_intervention_ids ?? [] };
 }
 
-export function exportRun(runId: string): Promise<ExportPayload> {
-  return request<ExportPayload>(`/api/runs/${runId}/export`);
+// events and active_intervention_ids are Go slices and arrive as null when empty.
+export async function exportRun(runId: string): Promise<ExportPayload> {
+  const res = await request<ExportPayload>(`/api/runs/${encodeURIComponent(runId)}/export`);
+  return {
+    ...res,
+    run: { ...res.run, active_intervention_ids: res.run.active_intervention_ids ?? [] },
+    events: res.events ?? [],
+  };
 }
 
-export function isCreateRunAccepted(r: CreateRunAccepted | Run): r is CreateRunAccepted {
-  return !("state" in r);
+// Polls GET /api/runs/{id} until the run is terminal (used for sequential repeats).
+export async function waitForRun(runId: string, opts: { signal?: AbortSignal; intervalMs?: number } = {}): Promise<Run> {
+  const interval = opts.intervalMs ?? 350;
+  for (;;) {
+    if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
+    const run = await getRun(runId);
+    if (isTerminalState(run.state)) return run;
+    await new Promise((r) => setTimeout(r, interval));
+  }
+}
+
+// POST /api/runs answers 202 {run_id} for a new run and 200 with the full Run when the
+// idempotency key was already used.
+export function isExistingRun(r: CreateRunAccepted | Run): r is Run {
+  return "state" in r;
 }
