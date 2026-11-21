@@ -170,7 +170,7 @@ export default function App() {
     <div className="app">
       <header>
         <div>
-          <b>ReproService</b>
+          <h1 className="brand">ReproService</h1>
           <span className="tag">REPRODUCE &middot; REDUCE &middot; VERIFY</span>
         </div>
         <button
@@ -182,10 +182,10 @@ export default function App() {
           Reset
         </button>
       </header>
-      <div className="notice">
+      <aside className="notice" aria-label="Controller address">
         Live controller at <code>{API_BASE}</code>. All data below comes from real API calls against the
         running Docker Compose stand -- nothing on this page is synthetic.
-      </div>
+      </aside>
 
       <main>
         {!scenario && (

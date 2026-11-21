@@ -83,7 +83,7 @@ export default function ExportPanel({ run, scenario, reduction }: Props) {
               <p>The controller returns at most 10000 events and does not say when it cuts the list.</p>
             </div>
           )}
-          <pre className="export-pre">{serializeExport(doc)}</pre>
+          <pre className="export-pre" tabIndex={0} role="region" aria-label="Export JSON preview">{serializeExport(doc)}</pre>
         </>
       )}
     </div>
