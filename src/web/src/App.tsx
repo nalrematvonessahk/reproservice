@@ -1,23 +1,21 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ScenarioPanel from "./components/ScenarioPanel";
 import RunPanel from "./components/RunPanel";
 import EventTimeline from "./components/EventTimeline";
 import ReductionPanel from "./components/ReductionPanel";
 import ComparePanel from "./components/ComparePanel";
 import ExportPanel from "./components/ExportPanel";
-import { ApiError, cancelRun, createRun, reduceRun } from "./api";
+import { API_BASE, cancelRun, createRun, describeError, isExistingRun, reduceRun } from "./api";
+import type { ErrorView } from "./api";
 import { useEventPolling, useRunPolling } from "./hooks";
+import { isTerminalState } from "./types";
 import type { ReduceAlgorithm, ReduceResult, Scenario } from "./types";
 
 function newIdempotencyKey(): string {
   return `ui-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-interface ErrLike {
-  code: string;
-  message: string;
-  correlation_id: string;
-}
+type ErrLike = ErrorView;
 
 export default function App() {
   const [scenario, setScenario] = useState<Scenario | null>(null);
@@ -28,14 +26,24 @@ export default function App() {
   const [runId, setRunId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<ErrLike | null>(null);
+  const [startNotice, setStartNotice] = useState<string | null>(null);
   const { run, error: pollError } = useRunPolling(runId);
   const events = useEventPolling(runId, run?.state ?? null);
 
   const [reducing, setReducing] = useState(false);
   const [reduceResult, setReduceResult] = useState<ReduceResult | null>(null);
   const [reduceError, setReduceError] = useState<ErrLike | null>(null);
+  const [comparing, setComparing] = useState(false);
 
   const runError = startError ?? pollError;
+  // The run the page currently shows; lets a slow reduce response detect that the user
+  // has moved on to another run or scenario and drop its result instead of showing it there.
+  const currentRunId = useRef<string | null>(null);
+  currentRunId.current = runId;
+  const runActive = run !== null && !isTerminalState(run.state);
+  // Anything that holds the stand and is controlled from a panel that Reset or loading
+  // another scenario would unmount: keep those controls locked until it ends.
+  const standHeld = runActive || reducing || comparing;
 
   function handleScenarioLoaded(sc: Scenario, vid: string) {
     setScenario(sc);
@@ -43,6 +51,7 @@ export default function App() {
     setActiveIds(new Set(sc.interventions.map((iv) => iv.id)));
     setRunId(null);
     setStartError(null);
+    setStartNotice(null);
     setReduceResult(null);
     setReduceError(null);
   }
@@ -59,22 +68,34 @@ export default function App() {
   async function handleStart() {
     if (!versionId) return;
     setStartError(null);
+    setStartNotice(null);
     setReduceResult(null);
     setReduceError(null);
     setStarting(true);
     try {
+      // Send ids in scenario order so the same selection always produces the same request.
+      const requested = scenario!.interventions.map((iv) => iv.id).filter((id) => activeIds.has(id));
       const res = await createRun({
         version_id: versionId,
         idempotency_key: idempotencyKey,
-        active_intervention_ids: Array.from(activeIds),
+        active_intervention_ids: requested,
       });
+      if (isExistingRun(res)) {
+        // 200 instead of 202: the key was already used, nothing new was started.
+        const same = res.active_intervention_ids.join(",") === requested.join(",");
+        const sameVersion = res.version_id === versionId;
+        setStartNotice(
+          `This idempotency key was already used, so run ${res.run_id} is shown instead of a new run.` +
+            (sameVersion ? "" : ` It belongs to a different scenario version (${res.version_id}), not the one loaded now (${versionId}).`) +
+            (same
+              ? ""
+              : ` It was started with ${res.active_intervention_ids.length} intervention(s), not the ${requested.length} selected now.`) +
+            (sameVersion && same ? "" : ` Use "Start a different run" for a new key.`)
+        );
+      }
       setRunId(res.run_id);
     } catch (e) {
-      if (e instanceof ApiError) {
-        setStartError({ code: e.body.code, message: e.body.message, correlation_id: e.body.correlation_id });
-      } else {
-        setStartError({ code: "UNKNOWN_ERROR", message: String(e), correlation_id: "" });
-      }
+      setStartError(describeError(e));
     } finally {
       setStarting(false);
     }
@@ -89,19 +110,36 @@ export default function App() {
     }
   }
 
+  // Reductions have no polling that would surface a failed cancel, so report it here.
+  async function handleCancelReduction() {
+    if (!runId) return;
+    try {
+      const res = await cancelRun(runId);
+      if (res.status === "not_running") {
+        setReduceError({
+          code: "CANCEL_NOT_APPLIED",
+          message: "The controller reports nothing to cancel yet. If the reduction is still running, try again.",
+          correlation_id: "",
+        });
+      }
+    } catch (e) {
+      setReduceError(describeError(e));
+    }
+  }
+
   async function handleReduce(algorithm: ReduceAlgorithm) {
     if (!runId) return;
     setReducing(true);
     setReduceError(null);
+    const forRun = runId;
     try {
-      const res = await reduceRun(runId, algorithm);
-      setReduceResult(res);
-    } catch (e) {
-      if (e instanceof ApiError) {
-        setReduceError({ code: e.body.code, message: e.body.message, correlation_id: e.body.correlation_id });
-      } else {
-        setReduceError({ code: "UNKNOWN_ERROR", message: String(e), correlation_id: "" });
+      const res = await reduceRun(forRun, algorithm);
+      if (currentRunId.current === forRun) {
+        setReduceResult(res);
+        setReduceError(null);
       }
+    } catch (e) {
+      if (currentRunId.current === forRun) setReduceError(describeError(e));
     } finally {
       setReducing(false);
     }
@@ -110,6 +148,7 @@ export default function App() {
   function handleNewRun() {
     setRunId(null);
     setStartError(null);
+    setStartNotice(null);
     setReduceResult(null);
     setReduceError(null);
     setIdempotencyKey(newIdempotencyKey());
@@ -121,6 +160,7 @@ export default function App() {
     setActiveIds(new Set());
     setRunId(null);
     setStartError(null);
+    setStartNotice(null);
     setReduceResult(null);
     setReduceError(null);
     setIdempotencyKey(newIdempotencyKey());
@@ -133,12 +173,17 @@ export default function App() {
           <b>ReproService</b>
           <span className="tag">REPRODUCE &middot; REDUCE &middot; VERIFY</span>
         </div>
-        <button className="secondary" onClick={handleFullReset}>
+        <button
+          className="secondary"
+          onClick={handleFullReset}
+          disabled={reducing || comparing}
+          title={reducing || comparing ? "Cancel the reduction/comparison in progress first" : undefined}
+        >
           Reset
         </button>
       </header>
       <div className="notice">
-        Live controller at <code>http://127.0.0.1:7000</code>. All data below comes from real API calls against the
+        Live controller at <code>{API_BASE}</code>. All data below comes from real API calls against the
         running Docker Compose stand -- nothing on this page is synthetic.
       </div>
 
@@ -152,7 +197,7 @@ export default function App() {
           </div>
         )}
 
-        <ScenarioPanel onLoaded={handleScenarioLoaded} disabled={run !== null && !["COMPLETED", "CANCELLED", "INFRA_ERROR"].includes(run.state)} />
+        <ScenarioPanel onLoaded={handleScenarioLoaded} disabled={standHeld} />
 
         {scenario && versionId && (
           <>
@@ -168,20 +213,21 @@ export default function App() {
               starting={starting}
               run={run}
               runError={runError}
+              notice={startNotice}
             />
 
             {run && (
               <div className="row" style={{ margin: "8px 0 24px" }}>
-                <button className="secondary" onClick={handleNewRun}>
+                <button className="secondary" onClick={handleNewRun} disabled={standHeld}>
                   Start a different run
                 </button>
               </div>
             )}
 
-            <EventTimeline events={events} />
+            <EventTimeline events={events} scenario={scenario} />
 
             {run && (
-              <ReductionPanel run={run} onReduce={handleReduce} busy={reducing} result={reduceResult} error={reduceError} />
+              <ReductionPanel run={run} onReduce={handleReduce} onCancel={handleCancelReduction} busy={reducing} result={reduceResult} error={reduceError} />
             )}
 
             {run && run.state === "COMPLETED" && (
@@ -190,10 +236,13 @@ export default function App() {
                 versionId={versionId}
                 baselineRun={run}
                 reducedIds={reduceResult ? reduceResult.accepted_intervention_ids : null}
+                onBusyChange={setComparing}
               />
             )}
 
-            {run && run.state === "COMPLETED" && <ExportPanel run={run} />}
+            {run && isTerminalState(run.state) && (
+              <ExportPanel key={run.run_id} run={run} scenario={scenario} reduction={reduceResult} />
+            )}
           </>
         )}
       </main>

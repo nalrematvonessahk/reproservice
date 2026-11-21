@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { Run, RunState, Scenario } from "../types";
+import { isTerminalState } from "../types";
+import type { Run, Scenario } from "../types";
 import StatusBadge from "./StatusBadge";
 import { explainRun } from "../explain";
 
@@ -15,9 +16,9 @@ interface Props {
   starting: boolean;
   run: Run | null;
   runError: { code: string; message: string; correlation_id: string } | null;
+  // Informational message about the last Start click (e.g. an idempotent replay).
+  notice: string | null;
 }
-
-const TERMINAL: RunState[] = ["COMPLETED", "CANCELLED", "INFRA_ERROR"];
 
 export default function RunPanel({
   scenario,
@@ -31,9 +32,10 @@ export default function RunPanel({
   starting,
   run,
   runError,
+  notice,
 }: Props) {
   const [showJson, setShowJson] = useState(false);
-  const isActive = run !== null && !TERMINAL.includes(run.state);
+  const isActive = run !== null && !isTerminalState(run.state);
 
   return (
     <div className="card">
@@ -98,6 +100,12 @@ export default function RunPanel({
           Cancel run
         </button>
       </div>
+
+      {notice && (
+        <div className="banner banner-warning" role="status">
+          <p>{notice}</p>
+        </div>
+      )}
 
       {runError && (
         <div className={`banner ${runError.code === "STAND_BUSY" ? "banner-warning" : "banner-error"}`} role="alert">

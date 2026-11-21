@@ -1,62 +1,91 @@
 import { useState } from "react";
-import { ApiError, exportRun } from "../api";
-import type { ExportPayload, Run } from "../types";
+import { describeError, exportRun } from "../api";
+import type { ErrorView } from "../api";
+import { buildExportDocument, exportFilename, mayBeTruncated, serializeExport } from "../exportDoc";
+import type { ExportDocument, ReduceResult, Run, Scenario } from "../types";
 
 interface Props {
   run: Run;
+  scenario: Scenario;
+  reduction: ReduceResult | null;
 }
 
-export default function ExportPanel({ run }: Props) {
-  const [data, setData] = useState<ExportPayload | null>(null);
+export default function ExportPanel({ run, scenario, reduction }: Props) {
+  const [doc, setDoc] = useState<ExportDocument | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ code: string; message: string } | null>(null);
+  const [error, setError] = useState<ErrorView | null>(null);
 
   async function handleExport() {
     setBusy(true);
     setError(null);
     try {
-      const res = await exportRun(run.run_id);
-      setData(res);
+      const payload = await exportRun(run.run_id);
+      setDoc(buildExportDocument(payload, scenario, reduction));
+      setTruncated(mayBeTruncated(payload));
     } catch (e) {
-      if (e instanceof ApiError) {
-        setError({ code: e.body.code, message: e.body.message });
-      } else {
-        setError({ code: "UNKNOWN_ERROR", message: String(e) });
-      }
+      setDoc(null);
+      setError(describeError(e));
     } finally {
       setBusy(false);
     }
   }
 
   function handleDownload() {
-    if (!data) return;
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    if (!doc) return;
+    const blob = new Blob([serializeExport(doc)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `reproservice-${run.run_id}.json`;
+    a.href = url;
+    a.download = exportFilename(doc.run);
+    // Some browsers only honour click() on an anchor that is attached to the page.
+    document.body.appendChild(a);
     a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   return (
     <div className="card">
       <h2>6. Export evidence</h2>
-      <p className="muted small">Fetches the run plus its full (already redacted) event log as JSON.</p>
+      <p className="muted small">
+        Fetches the run and its full event log (the proxy redacts sensitive headers before logging; the log holds no
+        headers or bodies) and adds the scenario configuration
+        {reduction ? " and the reduction result" : ""} shown on this page. Export again after reducing to include
+        the reduction.
+      </p>
       <div className="row">
         <button onClick={handleExport} disabled={busy}>
-          {busy ? "Exporting..." : "Export JSON"}
+          {busy ? "Exporting..." : doc ? "Refresh export" : "Export JSON"}
         </button>
-        <button className="secondary" onClick={handleDownload} disabled={!data}>
+        <button className="secondary" onClick={handleDownload} disabled={!doc}>
           Download file
         </button>
       </div>
       {error && (
-        <div className="banner banner-error">
+        <div className="banner banner-error" role="alert">
           <strong>{error.code}</strong>
           <p>{error.message}</p>
+          {error.correlation_id && <p className="small muted">correlation_id: {error.correlation_id}</p>}
         </div>
       )}
-      {data && <pre className="export-pre">{JSON.stringify(data, null, 2)}</pre>}
+      {doc && (
+        <>
+          <p className="small muted">
+            {doc.events.length} event(s) &middot; schema_version {doc.schema_version} &middot; outcome{" "}
+            {doc.run.outcome || doc.run.state}
+            {doc.reduction ? " · includes reduction" : ""}
+            {doc.events.length === 0 ? " · this run produced no events" : ""}
+          </p>
+          {truncated && (
+            <div className="banner banner-warning" role="alert">
+              <strong>Event log may be truncated</strong>
+              <p>The controller returns at most 10000 events and does not say when it cuts the list.</p>
+            </div>
+          )}
+          <pre className="export-pre">{serializeExport(doc)}</pre>
+        </>
+      )}
     </div>
   );
 }
