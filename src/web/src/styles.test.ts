@@ -27,4 +27,38 @@ describe("styles.css keyboard accessibility", () => {
   it("shows a focus ring on the label when its input has focus", () => {
     expect(rule(".file-label:focus-within")).toMatch(/outline\s*:\s*\d+px solid/);
   });
+
+  const luminance = (hex: string) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: string, b: string) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const color = (sel: string) => (rule(sel).match(/(?:^|[;\s])color\s*:\s*(#[0-9a-fA-F]{6})/) ?? [])[1] ?? "";
+
+  it("keeps secondary text above 4.5:1 on every background it is shown on", () => {
+    const muted = color(".muted");
+    expect(muted).not.toBe("");
+    for (const bg of ["#ffffff", "#f8fbff", "#f3f6fb", "#e8eff7"]) {
+      expect(ratio(muted, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("keeps the timeline time above 4.5:1 on a selected row", () => {
+    const time = color(".event-row .time");
+    expect(time).not.toBe("");
+    for (const bg of ["#ffffff", "#f3f6fb", "#e8eff7"]) {
+      expect(ratio(time, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("keeps definition labels above 4.5:1 inside every banner and the detail panel", () => {
+    const label = color(".kv dt");
+    expect(label).not.toBe("");
+    for (const bg of ["#ffffff", "#eef2f8", "#fff1ef", "#fff7e0", "#e9f8f1", "#f8fafd"]) {
+      expect(ratio(label, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
 });

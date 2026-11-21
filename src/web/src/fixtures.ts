@@ -1,4 +1,4 @@
-import type { Run, RunEvent } from "./types";
+import type { Run, RunEvent, Scenario } from "./types";
 
 export function ev(id: string, over: Partial<RunEvent> = {}): RunEvent {
   return {
@@ -32,3 +32,39 @@ export function run(over: Partial<Run> = {}): Run {
     ...over,
   };
 }
+
+export const scenarioFixture: Scenario = {
+  schema_version: 1,
+  id: "double-payment-demo",
+  environment: { compose_profile: "orders-demo", seed_id: "seed-001" },
+  invariant_id: "payment_exactly_once",
+  budget: { runs: 100, seconds: 600 },
+  interventions: [
+    {
+      id: "drop-payments-response",
+      selector: {
+        logical_operation: "checkout-001",
+        source: "orders",
+        target: "payments",
+        method: "POST",
+        normalized_path: "/charge",
+        attempt: 1,
+      },
+      action: { type: "drop_response_after_success" },
+      depends_on: [],
+    },
+    {
+      id: "delay-inventory",
+      selector: {
+        logical_operation: "checkout-001",
+        source: "orders",
+        target: "inventory",
+        method: "POST",
+        normalized_path: "/reserve",
+        attempt: 1,
+      },
+      action: { type: "delay", delay_ms: 200 },
+      depends_on: ["drop-payments-response"],
+    },
+  ],
+};
