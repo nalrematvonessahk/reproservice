@@ -53,4 +53,12 @@ describe("styles.css keyboard accessibility", () => {
       expect(ratio(time, bg)).toBeGreaterThanOrEqual(4.5);
     }
   });
+
+  it("keeps definition labels above 4.5:1 inside every banner and the detail panel", () => {
+    const label = color(".kv dt");
+    expect(label).not.toBe("");
+    for (const bg of ["#ffffff", "#eef2f8", "#fff1ef", "#fff7e0", "#e9f8f1", "#f8fafd"]) {
+      expect(ratio(label, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+  });
 });
