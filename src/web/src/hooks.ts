@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, describeError, getRun, listEvents } from "./api";
+import { MAX_TRANSIENT_FAILURES, describeError, getRun, isTransientError, listEvents } from "./api";
 import type { ErrorView } from "./api";
 import { mergeEvents } from "./events";
 import { isTerminalState } from "./types";
@@ -8,14 +8,13 @@ import type { Run, RunEvent } from "./types";
 const POLL_MS = 350;
 // The controller returns at most this many events per page (api.go listEvents).
 const EVENT_PAGE = 500;
-// Consecutive transient poll failures tolerated before the error is shown.
-const MAX_TRANSIENT_FAILURES = 5;
+// After the error has been shown, keep polling slowly so the view recovers (and
+// run-dependent controls unlock) once the controller is back.
+const RECOVERY_POLL_MS = 3000;
+// Retries of the final event drain after the run turned terminal.
+const MAX_DRAIN_RETRIES = 5;
 
 export type ApiErrorLike = ErrorView;
-
-function isTransient(e: unknown): boolean {
-  return e instanceof ApiError && (e.status === 0 || e.status >= 500);
-}
 
 // Polls GET /api/runs/{id} until the run reaches a terminal state. A transient failure
 // (controller restarting, network blip) is retried a few times instead of freezing the
@@ -44,11 +43,13 @@ export function useRunPolling(runId: string | null) {
       } catch (e) {
         if (cancelled) return;
         failures++;
-        if (isTransient(e) && failures < MAX_TRANSIENT_FAILURES) {
+        if (isTransientError(e) && failures < MAX_TRANSIENT_FAILURES) {
           timer = setTimeout(tick, POLL_MS * failures);
           return;
         }
         setError(describeError(e));
+        // A 404 will not fix itself; a dead controller might.
+        if (isTransientError(e)) timer = setTimeout(tick, RECOVERY_POLL_MS);
       }
     }
     tick();
@@ -103,11 +104,20 @@ export function useEventPolling(runId: string | null, runState: string | null) {
       }
     }
 
+    let drainFailures = 0;
     async function tick() {
       try {
         await drain();
+        drainFailures = 0;
       } catch {
-        // Event polling errors are non-fatal for the run view; the next tick retries.
+        // Event polling errors are non-fatal for the run view. While the run is active
+        // the next tick retries; after it ended, retry a bounded number of times so the
+        // final events are not lost to one failed request.
+        drainFailures++;
+        if (!cancelled && isTerminal && drainFailures < MAX_DRAIN_RETRIES) {
+          timer = setTimeout(tick, POLL_MS * drainFailures);
+          return;
+        }
       }
       if (!cancelled && !isTerminal) timer = setTimeout(tick, POLL_MS);
     }

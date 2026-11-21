@@ -11,6 +11,8 @@ interface Props {
   versionId: string;
   baselineRun: Run;
   reducedIds: string[] | null;
+  // Lets the page keep navigation locked while repeats are in flight.
+  onBusyChange?: (busy: boolean) => void;
 }
 
 const REPEAT_OPTIONS = [1, MIN_REPEATS_FOR_CONCLUSION, 5];
@@ -69,13 +71,14 @@ function Environment({ scenario, versionId }: { scenario: Scenario; versionId: s
 // scenario version (same seed, same scenario) with a different active_intervention_ids
 // set -- the reduced set, or an empty one to model "the fault is gone" -- repeat it, and
 // show the outcomes next to the original run.
-export default function ComparePanel({ scenario, versionId, baselineRun, reducedIds }: Props) {
+export default function ComparePanel({ scenario, versionId, baselineRun, reducedIds, onBusyChange }: Props) {
   const [mode, setMode] = useState<"reduced" | "none" | "all">(reducedIds ? "reduced" : "none");
   const [repeats, setRepeats] = useState(MIN_REPEATS_FOR_CONCLUSION);
   const [runs, setRuns] = useState<Run[]>([]);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<ErrorView | null>(null);
   const currentRunId = useRef<string | null>(null);
+  const cancelRequested = useRef(false);
   const alive = useRef(true);
   const abort = useRef(new AbortController());
 
@@ -88,33 +91,44 @@ export default function ComparePanel({ scenario, versionId, baselineRun, reduced
     };
   }, []);
 
-  // When a reduction finishes after the panel was shown, offer its result.
+  useEffect(() => {
+    onBusyChange?.(running);
+    return () => onBusyChange?.(false);
+  }, [running, onBusyChange]);
+
+  // Offer a reduction result when it appears; fall back when it goes away (a replayed
+  // run clears it) so the select never shows one option while another would be sent.
   useEffect(() => {
     if (reducedIds) setMode("reduced");
+    else setMode((m) => (m === "reduced" ? "none" : m));
   }, [reducedIds]);
 
   function idsForMode(): string[] {
     if (mode === "none") return [];
-    if (mode === "reduced" && reducedIds) return reducedIds;
+    if (mode === "reduced") return reducedIds ?? [];
     return scenario.interventions.map((iv) => iv.id);
   }
 
   async function handleRun() {
     setError(null);
     setRuns([]);
+    cancelRequested.current = false;
     setRunning(true);
     const ids = idsForMode();
     const batch = Date.now();
     const ac = abort.current;
     try {
-      for (let i = 0; i < repeats; i++) {
+      for (let i = 0; i < repeats && !cancelRequested.current; i++) {
         const res = await startRunWhenFree({
           version_id: versionId,
           idempotency_key: `compare-${mode}-${batch}-${i}`,
           active_intervention_ids: ids,
         });
         currentRunId.current = res.run_id;
+        // Cancel was clicked while this run was being started: it has no id to cancel yet.
+        if (cancelRequested.current) await cancelRun(res.run_id).catch(() => undefined);
         const done = await waitForRun(res.run_id, { signal: ac.signal });
+        currentRunId.current = null;
         if (!alive.current) return;
         setRuns((prev) => [...prev, done]);
         if (done.state !== "COMPLETED") break; // cancelled or infra error: do not keep repeating
@@ -128,6 +142,7 @@ export default function ComparePanel({ scenario, versionId, baselineRun, reduced
   }
 
   async function handleCancel() {
+    cancelRequested.current = true; // also stops the loop between two repeats
     const id = currentRunId.current;
     if (!id) return;
     try {

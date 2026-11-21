@@ -97,6 +97,17 @@ describe("API client against the controller's real wire shapes", () => {
     expect(done.state).toBe("COMPLETED");
   });
 
+  it("waitForRun rides out transient failures but not persistent ones or 404s", async () => {
+    mockFetch(new TypeError("down"), json({ code: "X", message: "m", correlation_id: "" }, 503), json(run({ state: "COMPLETED" })));
+    expect((await waitForRun("run-1", { intervalMs: 1 })).state).toBe("COMPLETED");
+
+    mockFetch(...Array.from({ length: 5 }, () => new TypeError("down")));
+    await expect(waitForRun("run-1", { intervalMs: 1 })).rejects.toMatchObject({ body: { code: "NETWORK_ERROR" } });
+
+    mockFetch(json({ code: "RUN_NOT_FOUND", message: "m", correlation_id: "" }, 404));
+    await expect(waitForRun("run-1", { intervalMs: 1 })).rejects.toMatchObject({ status: 404 });
+  });
+
   it("waitForRun stops when aborted", async () => {
     mockFetch(json(run({ state: "RUNNING" })));
     const ac = new AbortController();

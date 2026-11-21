@@ -33,6 +33,7 @@ export default function App() {
   const [reducing, setReducing] = useState(false);
   const [reduceResult, setReduceResult] = useState<ReduceResult | null>(null);
   const [reduceError, setReduceError] = useState<ErrLike | null>(null);
+  const [comparing, setComparing] = useState(false);
 
   const runError = startError ?? pollError;
   // The run the page currently shows; lets a slow reduce response detect that the user
@@ -40,6 +41,9 @@ export default function App() {
   const currentRunId = useRef<string | null>(null);
   currentRunId.current = runId;
   const runActive = run !== null && !isTerminalState(run.state);
+  // Anything that holds the stand and is controlled from a panel that Reset or loading
+  // another scenario would unmount: keep those controls locked until it ends.
+  const standHeld = runActive || reducing || comparing;
 
   function handleScenarioLoaded(sc: Scenario, vid: string) {
     setScenario(sc);
@@ -79,11 +83,14 @@ export default function App() {
       if (isExistingRun(res)) {
         // 200 instead of 202: the key was already used, nothing new was started.
         const same = res.active_intervention_ids.join(",") === requested.join(",");
+        const sameVersion = res.version_id === versionId;
         setStartNotice(
           `This idempotency key was already used, so run ${res.run_id} is shown instead of a new run.` +
+            (sameVersion ? "" : ` It belongs to a different scenario version (${res.version_id}), not the one loaded now (${versionId}).`) +
             (same
               ? ""
-              : ` It was started with ${res.active_intervention_ids.length} intervention(s), not the ${requested.length} selected now. Use "Start a different run" for a new key.`)
+              : ` It was started with ${res.active_intervention_ids.length} intervention(s), not the ${requested.length} selected now.`) +
+            (sameVersion && same ? "" : ` Use "Start a different run" for a new key.`)
         );
       }
       setRunId(res.run_id);
@@ -103,6 +110,23 @@ export default function App() {
     }
   }
 
+  // Reductions have no polling that would surface a failed cancel, so report it here.
+  async function handleCancelReduction() {
+    if (!runId) return;
+    try {
+      const res = await cancelRun(runId);
+      if (res.status === "not_running") {
+        setReduceError({
+          code: "CANCEL_NOT_APPLIED",
+          message: "The controller reports nothing to cancel yet. If the reduction is still running, try again.",
+          correlation_id: "",
+        });
+      }
+    } catch (e) {
+      setReduceError(describeError(e));
+    }
+  }
+
   async function handleReduce(algorithm: ReduceAlgorithm) {
     if (!runId) return;
     setReducing(true);
@@ -110,7 +134,10 @@ export default function App() {
     const forRun = runId;
     try {
       const res = await reduceRun(forRun, algorithm);
-      if (currentRunId.current === forRun) setReduceResult(res);
+      if (currentRunId.current === forRun) {
+        setReduceResult(res);
+        setReduceError(null);
+      }
     } catch (e) {
       if (currentRunId.current === forRun) setReduceError(describeError(e));
     } finally {
@@ -146,7 +173,12 @@ export default function App() {
           <b>ReproService</b>
           <span className="tag">REPRODUCE &middot; REDUCE &middot; VERIFY</span>
         </div>
-        <button className="secondary" onClick={handleFullReset}>
+        <button
+          className="secondary"
+          onClick={handleFullReset}
+          disabled={reducing || comparing}
+          title={reducing || comparing ? "Cancel the reduction/comparison in progress first" : undefined}
+        >
           Reset
         </button>
       </header>
@@ -165,7 +197,7 @@ export default function App() {
           </div>
         )}
 
-        <ScenarioPanel onLoaded={handleScenarioLoaded} disabled={runActive || reducing} />
+        <ScenarioPanel onLoaded={handleScenarioLoaded} disabled={standHeld} />
 
         {scenario && versionId && (
           <>
@@ -186,7 +218,7 @@ export default function App() {
 
             {run && (
               <div className="row" style={{ margin: "8px 0 24px" }}>
-                <button className="secondary" onClick={handleNewRun} disabled={reducing || runActive}>
+                <button className="secondary" onClick={handleNewRun} disabled={standHeld}>
                   Start a different run
                 </button>
               </div>
@@ -195,7 +227,7 @@ export default function App() {
             <EventTimeline events={events} scenario={scenario} />
 
             {run && (
-              <ReductionPanel run={run} onReduce={handleReduce} onCancel={handleCancel} busy={reducing} result={reduceResult} error={reduceError} />
+              <ReductionPanel run={run} onReduce={handleReduce} onCancel={handleCancelReduction} busy={reducing} result={reduceResult} error={reduceError} />
             )}
 
             {run && run.state === "COMPLETED" && (
@@ -204,6 +236,7 @@ export default function App() {
                 versionId={versionId}
                 baselineRun={run}
                 reducedIds={reduceResult ? reduceResult.accepted_intervention_ids : null}
+                onBusyChange={setComparing}
               />
             )}
 

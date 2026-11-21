@@ -13,13 +13,19 @@ import type { RunEvent } from "./types";
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 interface FakeRun {
+  version: string;
   run_id: string;
   key: string;
   active: string[];
   polls: number;
 }
 
-function startFakeController(opts: { eventsNull?: boolean; reduceDelayMs?: number; exportStatus?: number } = {}) {
+function startFakeController(
+  opts: { eventsNull?: boolean; reduceDelayMs?: number; exportStatus?: number; failRunPolls?: number; cancelNotRunning?: boolean; failFinalEvents?: number } = {}
+) {
+  let failPolls = opts.failRunPolls ?? 0;
+  let failEvents = opts.failFinalEvents ?? 0;
+  let versions = 0;
   const runs: FakeRun[] = [];
   const calls: string[] = [];
   const events: RunEvent[] = [
@@ -28,7 +34,7 @@ function startFakeController(opts: { eventsNull?: boolean; reduceDelayMs?: numbe
     ev("e3", { source: "orders", target: "inventory", phase: "response", result: "forwarded", status_code: 200, created_at: "2026-11-21T10:00:00.300000Z" }),
   ];
   const wire = (r: FakeRun) => ({
-    run_id: r.run_id, scenario_id: "multi-fault-demo", version_id: "ver-1", idempotency_key: r.key,
+    run_id: r.run_id, scenario_id: "multi-fault-demo", version_id: r.version, idempotency_key: r.key,
     state: r.polls < 2 ? "RUNNING" : "COMPLETED",
     ...(r.polls < 2 ? {} : { outcome: r.active.includes("fault-1") ? "ORIGINAL_FAILURE" : "PASS" }),
     active_intervention_ids: r.active, created_at: "t", updated_at: "t",
@@ -41,12 +47,12 @@ function startFakeController(opts: { eventsNull?: boolean; reduceDelayMs?: numbe
     const path = url.pathname;
     const method = init?.method ?? "GET";
     calls.push(`${method} ${path}${url.search}`);
-    if (method === "POST" && path === "/api/scenarios") return j({ schema_version: 1, version_id: "ver-1", scenario_id: "multi-fault-demo" });
+    if (method === "POST" && path === "/api/scenarios") return j({ schema_version: 1, version_id: `ver-${++versions}`, scenario_id: "multi-fault-demo" });
     if (method === "POST" && path === "/api/runs") {
       const body = JSON.parse(String(init?.body));
       const existing = runs.find((r) => r.key === body.idempotency_key);
       if (existing) return j(wire(existing));
-      const r: FakeRun = { run_id: `run-${runs.length + 1}`, key: body.idempotency_key, active: body.active_intervention_ids ?? ["fault-1", "fault-2-decoy"], polls: 0 };
+      const r: FakeRun = { version: body.version_id, run_id: `run-${runs.length + 1}`, key: body.idempotency_key, active: body.active_intervention_ids ?? ["fault-1", "fault-2-decoy"], polls: 0 };
       runs.push(r);
       return j({ run_id: r.run_id }, 202);
     }
@@ -54,9 +60,14 @@ function startFakeController(opts: { eventsNull?: boolean; reduceDelayMs?: numbe
     if (m) {
       const r = runs.find((x) => x.run_id === m[1]);
       if (!r) return j({ code: "RUN_NOT_FOUND", message: "run not found", correlation_id: "corr-x" }, 404);
-      if (!m[2]) { r.polls++; return j(wire(r)); }
+      if (!m[2]) {
+        if (failPolls > 0) { failPolls--; return j({ code: "UNAVAILABLE", message: "controller restarting", correlation_id: "" }, 503); }
+        r.polls++;
+        return j(wire(r));
+      }
       if (m[2] === "/events") {
         if (r.polls < 2 || opts.eventsNull) return j({ events: null, cursor: "" });
+        if (failEvents > 0) { failEvents--; return j({ code: "DB_ERROR", message: "db hiccup", correlation_id: "" }, 500); }
         // like the real controller: the cursor is millisecond-truncated, so the last
         // event of the previous page comes back again
         const after = url.searchParams.get("cursor");
@@ -67,7 +78,7 @@ function startFakeController(opts: { eventsNull?: boolean; reduceDelayMs?: numbe
         await new Promise((res) => setTimeout(res, opts.reduceDelayMs ?? 0));
         return j({ reduction_id: "red-1", run_id: r.run_id, algorithm: "ddmin", state: "COMPLETED", accepted_intervention_ids: ["fault-1"], runs_used: 7, max_runs: 100, stop_reason: "minimal", unstable: false, confirmed: true, one_minimal: true, confirmation_runs: 6, cache_hits: 0, skipped_invalid: 0, duration_ms: 10 });
       }
-      if (m[2] === "/cancel") return j({ status: "cancel_requested" });
+      if (m[2] === "/cancel") return j(opts.cancelNotRunning ? { status: "not_running", state: "COMPLETED" } : { status: "cancel_requested" });
       if (m[2] === "/export") {
         if (opts.exportStatus) return j({ code: "DB_ERROR", message: "db down", correlation_id: "corr-9" }, opts.exportStatus);
         return j({ schema_version: 1, run: wire(r), events: opts.eventsNull ? null : events });
@@ -287,6 +298,83 @@ describe("main workflow", () => {
     expect(text()).toContain("corr-9");
     expect(button("Download file")?.disabled).toBe(true);
   });
+
+  it("retries the final event fetch so a failed request does not lose the last events", async () => {
+    startFakeController({ failFinalEvents: 2 });
+    await loadMultiFaultAndRun();
+    await waitFor(() => container.querySelectorAll("button.event-row").length === 3, "all events after retries", 10000);
+  }, 15000);
+
+  it("keeps Reset and navigation locked while a reduction holds the stand", async () => {
+    startFakeController({ reduceDelayMs: 300 });
+    await loadMultiFaultAndRun();
+    await click("Reduce");
+    await waitFor(() => button("Cancel reduction")?.disabled === false, "reduction in flight");
+    expect(button("Reset")?.disabled).toBe(true);
+    expect(button("Start a different run")?.disabled).toBe(true);
+    expect(button(/Validate & load scenario/)?.disabled).toBe(true);
+    await waitFor(() => text().includes("stop_reason: minimal"), "reduction result");
+    expect(button("Reset")?.disabled).toBe(false);
+  });
+
+  it("tells the user when cancelling the reduction had no effect", async () => {
+    startFakeController({ reduceDelayMs: 300, cancelNotRunning: true });
+    await loadMultiFaultAndRun();
+    await click("Reduce");
+    await waitFor(() => button("Cancel reduction")?.disabled === false, "reduction in flight");
+    await click("Cancel reduction");
+    await waitFor(() => text().includes("CANCEL_NOT_APPLIED"), "cancel feedback");
+    await waitFor(() => text().includes("stop_reason: minimal"), "reduction result");
+    expect(text()).not.toContain("CANCEL_NOT_APPLIED"); // cleared once the reduction reports
+  });
+
+  it("falls back to the 'none' set when a replay clears the reduction result", async () => {
+    const { runs } = startFakeController();
+    await loadMultiFaultAndRun();
+    await click("Reduce");
+    await waitFor(() => text().includes("stop_reason: minimal"), "reduction");
+    await click("Start run"); // same key: replay, clears the reduction
+    await waitFor(() => text().includes("already used"), "replay notice");
+    expect((container.querySelector("#compare-mode") as HTMLSelectElement).value).toBe("none");
+    await choose("compare-repeats", "1");
+    await click("Run comparison");
+    await waitFor(() => runs.length === 2, "comparison run started");
+    expect(runs[1].active).toEqual([]); // what the select shows is what is sent
+  });
+
+  it("warns when a reused key belongs to another scenario version", async () => {
+    startFakeController();
+    await loadMultiFaultAndRun();
+    await click(/Validate & load scenario/); // new version, same idempotency key
+    await waitFor(() => !!button("Start run"), "Start run");
+    await click("Start run");
+    await waitFor(() => text().includes("different scenario version"), "version warning");
+  });
+
+  it("stops repeating when the comparison is cancelled", async () => {
+    const { runs } = startFakeController();
+    await loadMultiFaultAndRun();
+    await choose("compare-mode", "none");
+    await choose("compare-repeats", "5");
+    await click("Run comparison");
+    expect(button("Reset")?.disabled).toBe(true);
+    await click("Cancel comparison");
+    await waitFor(() => button("Run comparison")?.disabled === false, "comparison to stop", 15000);
+    expect(runs.length - 1).toBeLessThan(5);
+    expect(button("Reset")?.disabled).toBe(false);
+  }, 20000);
+
+  it("recovers the run view after the controller was unreachable for a while", async () => {
+    startFakeController({ failRunPolls: 5 });
+    await act(async () => { root.render(<App />); });
+    await click(/Validate & load scenario/);
+    await waitFor(() => !!button("Start run"), "Start run");
+    await click("Start run");
+    await waitFor(() => !!container.querySelector('[role="alert"]')?.textContent?.includes("UNAVAILABLE"), "error shown", 12000);
+    // the lock must not stay on forever: polling continues and finds the finished run
+    await waitFor(() => container.querySelector(".status-block .badge")?.textContent === "ORIGINAL_FAILURE", "recovery", 15000);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  }, 30000);
 
   it("Reset clears everything", async () => {
     startFakeController();

@@ -35,8 +35,12 @@ describe("summarizeRepeats (FR11: no 'fixed' conclusion without repeats)", () =>
     expect(s.verdict).toBe("mixed");
     expect(s.counts["CANCELLED"]).toBe(1);
   });
-  it("does not claim a fix when the original run did not fail", () => {
-    expect(summarizeRepeats(pass(3), run({ outcome: "PASS" })).verdict).toBe("mixed");
+  it("does not claim a fix when the original run did not fail, and does not call uniform results flaky", () => {
+    const s = summarizeRepeats(pass(3), run({ outcome: "PASS" }));
+    expect(s.verdict).toBe("uniform");
+    expect(s.text).not.toMatch(/flaky/);
+    const others = Array.from({ length: 3 }, (_, i) => run({ run_id: `o${i}`, outcome: "OTHER_FAILURE" }));
+    expect(summarizeRepeats(others, failed).verdict).toBe("uniform");
   });
   it("returns an empty summary for no runs", () => {
     expect(summarizeRepeats([], failed).text).toBe("");

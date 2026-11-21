@@ -81,6 +81,13 @@ export function parseErrorBody(status: number, statusText: string, text: string)
   };
 }
 
+// A failure worth retrying: the controller was unreachable (status 0) or answered 5xx.
+export function isTransientError(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 0 || e.status >= 500);
+}
+
+export const MAX_TRANSIENT_FAILURES = 5;
+
 export interface ErrorView {
   code: string;
   message: string;
@@ -170,11 +177,18 @@ export async function exportRun(runId: string): Promise<ExportPayload> {
 // Polls GET /api/runs/{id} until the run is terminal (used for sequential repeats).
 export async function waitForRun(runId: string, opts: { signal?: AbortSignal; intervalMs?: number } = {}): Promise<Run> {
   const interval = opts.intervalMs ?? 350;
+  let failures = 0;
   for (;;) {
     if (opts.signal?.aborted) throw new DOMException("aborted", "AbortError");
-    const run = await getRun(runId);
-    if (isTerminalState(run.state)) return run;
-    await new Promise((r) => setTimeout(r, interval));
+    try {
+      const run = await getRun(runId);
+      failures = 0;
+      if (isTerminalState(run.state)) return run;
+    } catch (e) {
+      // Same tolerance as the main run view: ride out a short controller restart.
+      if (!isTransientError(e) || ++failures >= MAX_TRANSIENT_FAILURES) throw e;
+    }
+    await new Promise((r) => setTimeout(r, interval * Math.max(1, failures)));
   }
 }
 
