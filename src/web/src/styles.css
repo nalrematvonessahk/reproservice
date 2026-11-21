@@ -172,8 +172,23 @@ textarea:focus-visible {
   font-size: 14px;
   margin: 4px 6px 4px 0;
 }
+/* The native file input stays in the tab order (display:none would make "Upload file"
+   unreachable by keyboard); it is only visually hidden, and the label shows the focus. */
+.file-label {
+  position: relative;
+}
 .file-label input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  pointer-events: none;
+}
+.file-label:focus-within {
+  outline: 3px solid #d19b20;
+  outline-offset: 2px;
 }
 
 /* Status badges: each tone must be visually distinct, not just color-coded text,
@@ -413,7 +428,8 @@ footer {
 }
 .compare-env {
   font-size: 13px;
-  word-break: break-all;
+  /* long ids/digests may wrap anywhere, normal words must not be cut mid-word */
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 480px) {

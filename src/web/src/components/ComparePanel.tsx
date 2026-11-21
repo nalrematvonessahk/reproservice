@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ApiError, cancelRun, createRun, describeError, waitForRun } from "../api";
 import type { ErrorView } from "../api";
 import type { Run, Scenario } from "../types";
@@ -91,7 +91,8 @@ export default function ComparePanel({ scenario, versionId, baselineRun, reduced
     };
   }, []);
 
-  useEffect(() => {
+  // Layout effect: the page must lock Reset/navigation before the next paint, not after.
+  useLayoutEffect(() => {
     onBusyChange?.(running);
     return () => onBusyChange?.(false);
   }, [running, onBusyChange]);
